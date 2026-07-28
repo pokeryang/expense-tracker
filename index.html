@@ -97,6 +97,18 @@
   .cat-legend .c{font-size:12px; padding:2px 9px; border-radius:999px; background:var(--chip); cursor:pointer; border:1px solid transparent;}
   .cat-legend .c.on{border-color:var(--brand); background:#eaf1f9;}
   .cat-legend .c i{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:middle;}
+  /* 3 卡共用分类图例条 */
+  .cat-legend-bar{display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center; background:var(--card); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:10px 14px; margin:16px 0 0;}
+  .cat-legend-bar .lg-grp{display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+  .cat-legend-bar .lg-t{font-size:12px; color:var(--sub); font-weight:600; margin-right:2px;}
+  .cat-legend-bar .c{font-size:12px; padding:2px 8px; border-radius:999px; background:var(--chip); color:#495062; white-space:nowrap;}
+  .cat-legend-bar .c i{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; vertical-align:middle;}
+  /* 年度年份选择：无边框、单行、横向滚动 */
+  .year-tabs{display:flex; gap:6px; overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; padding-bottom:3px; scrollbar-width:thin;}
+  .year-tabs::-webkit-scrollbar{height:5px;}
+  .year-tabs::-webkit-scrollbar-thumb{background:#d3d8e0; border-radius:3px;}
+  .year-tabs button{flex:0 0 auto; border:0; background:var(--chip); padding:5px 13px; font-size:13px; cursor:pointer; color:var(--sub); border-radius:8px;}
+  .year-tabs button.on{background:var(--brand); color:#fff;}
   .empty{padding:26px; text-align:center; color:var(--sub);}
   details.setup{margin-top:8px; border:1px dashed var(--line); border-radius:10px; padding:10px 12px; background:#fafbfc;}
   details.setup summary{cursor:pointer; font-size:13.5px; color:var(--brand-d); font-weight:600;}
@@ -128,8 +140,8 @@
 
   <!-- ============ 导入截图 ============ -->
   <section class="card">
-    <h2>丢截图进来，自动识别</h2>
-    <p class="hint">支持微信/支付宝账单、各消费 APP 订单、银行卡账单截图。可一次拖多张。OCR 在你本机浏览器里完成，图片不上传。首次识别需联网下载中文模型（约 15–40MB，之后缓存）。</p>
+    <h2>导入截图/表格</h2>
+    <p class="hint">支持微信/支付宝/银行卡账单及购物 APP 订单截图。OCR 在本机浏览器里完成识别（首次识别需下载约 15–40MB 的模型）。</p>
     <div id="drop">
       <div style="font-size:15px;"><b>把截图拖到这里</b>，或点击选择图片</div>
       <div style="margin-top:6px; font-size:13px;">也可以直接 <b>Ctrl/⌘+V 粘贴</b> 剪贴板里的截图</div>
@@ -165,16 +177,18 @@
     </div>
   </section>
 
+  <!-- ============ 分类图例（3 张统计卡共用） ============ -->
+  <div id="catLegend" class="cat-legend-bar"></div>
+
   <!-- ============ 3 张统计卡横向均布 ============ -->
   <div class="stat-row">
   <!-- ============ 总计 ============ -->
   <section class="card">
     <h2>总计</h2>
     <div class="row" style="margin-bottom:8px; gap:6px; align-items:center;">
-      <span class="muted" style="font-size:13px;">起</span>
-      <input type="month" class="ctl" id="totalStart" style="padding:5px 7px;">
-      <span class="muted" style="font-size:13px;">止</span>
-      <input type="month" class="ctl" id="totalEnd" style="padding:5px 7px;">
+      <input type="month" class="ctl" id="totalStart">
+      <span class="muted" style="font-size:13px;">~</span>
+      <input type="month" class="ctl" id="totalEnd">
       <button class="btn sm" id="totalRangeReset">全部</button>
     </div>
     <div class="kpis" id="kTotal"></div>
@@ -197,39 +211,10 @@
     </div>
   </section>
 
-  <!-- ============ 月度 ============ -->
-  <section class="card">
-    <h2>月度</h2>
-    <div class="row" style="margin-bottom:8px; gap:8px;">
-      <span class="muted">月份</span>
-      <input type="month" class="ctl" id="monthPick" min="2021-01" max="2026-07">
-      <button class="btn sm" id="monthPrev">◀ 上月</button>
-      <button class="btn sm" id="monthNext">下月 ▶</button>
-    </div>
-    <div class="kpis" id="kMonth"></div>
-    <div class="stat-grid">
-      <div>
-        <div class="row" style="justify-content:space-between; margin-bottom:6px;">
-          <div class="muted" style="font-size:13px;">当月分类占比</div>
-          <div class="seg pie-flow" data-scope="month">
-            <button data-flow="expense" class="on">支出</button>
-            <button data-flow="income">收入</button>
-            <button data-flow="transfer">储蓄/投资</button>
-          </div>
-        </div>
-        <div class="chart" id="pieMonth"></div>
-      </div>
-      <div>
-        <div class="muted" style="font-size:13px; margin-bottom:6px;">当月每日收支</div>
-        <div class="chart" id="barMonth"></div>
-      </div>
-    </div>
-  </section>
-
   <!-- ============ 年度 ============ -->
   <section class="card">
     <h2>年度</h2>
-    <div class="seg" id="yearTabs" style="margin-bottom:8px; flex-wrap:wrap;"></div>
+    <div class="year-tabs" id="yearTabs" style="margin-bottom:8px;"></div>
     <div id="yearLoad" class="muted" style="font-size:12px; margin:-2px 0 8px; display:none;">⏳ 云端数据加载中，年份可能暂不完整…</div>
     <div class="kpis" id="kYear"></div>
     <div class="stat-grid">
@@ -247,6 +232,35 @@
       <div>
         <div class="muted" style="font-size:13px; margin-bottom:6px;">当年各月收支</div>
         <div class="chart" id="barYear"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 月度 ============ -->
+  <section class="card">
+    <h2>月度</h2>
+    <div class="row" style="margin-bottom:8px; gap:8px;">
+      <span class="muted">月份</span>
+      <input type="month" class="ctl" id="monthPick">
+      <button class="btn sm" id="monthPrev">上月</button>
+      <button class="btn sm" id="monthNext">下月</button>
+    </div>
+    <div class="kpis" id="kMonth"></div>
+    <div class="stat-grid">
+      <div>
+        <div class="row" style="justify-content:space-between; margin-bottom:6px;">
+          <div class="muted" style="font-size:13px;">当月分类占比</div>
+          <div class="seg pie-flow" data-scope="month">
+            <button data-flow="expense" class="on">支出</button>
+            <button data-flow="income">收入</button>
+            <button data-flow="transfer">储蓄/投资</button>
+          </div>
+        </div>
+        <div class="chart" id="pieMonth"></div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">当月每日收支</div>
+        <div class="chart" id="barMonth"></div>
       </div>
     </div>
   </section>
@@ -416,6 +430,8 @@ create policy "expenses_all" on public.expenses
   function uid(){ return "e"+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
   function pad(n){ return n<10?"0"+n:""+n; }
   function todayStr(){ var d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
+  function curMonth(){ return todayStr().slice(0,7); }
+  function curYear(){ return todayStr().slice(0,4); }
   function fmtMoney(n){ n=Number(n)||0; return n.toLocaleString("zh-CN",{minimumFractionDigits:2,maximumFractionDigits:2}); }
   function fmtInt(n){ n=Math.round(Number(n)||0); return n.toLocaleString("zh-CN"); }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
@@ -517,9 +533,16 @@ create policy "expenses_all" on public.expenses
       }
       // paged fetch: PostgREST caps a single response at 1000 rows,
       // so keep walking Range windows until a short page is returned.
-      var PAGE=1000, offset=0, cloudById={}, aborted=false;
+      // 先加载最近的数据：按 ts 倒序取，第一页(最新1000条)到手即渲染，其余在后台续拉。
+      var PAGE=1000, offset=0, cloudById={}, aborted=false, firstDone=false;
+      function mergeCloudIntoState(){
+        var merged={};
+        state.records.forEach(function(r){ merged[r.id]=r; });
+        Object.keys(cloudById).forEach(function(id){ merged[id]=cloudById[id]; });
+        state.records=Object.keys(merged).map(function(k){ return merged[k]; });
+      }
       function nextPage(){
-        SB.from(TABLE).select("*").range(offset, offset+PAGE-1).then(function(res){
+        SB.from(TABLE).select("*").order("ts",{ascending:false}).range(offset, offset+PAGE-1).then(function(res){
           if(res.error){
             console.warn("cloud fetch err",res.error);
             CLOUD_ON=false; aborted=true;
@@ -528,13 +551,12 @@ create policy "expenses_all" on public.expenses
           }
           var data=res.data||[];
           data.forEach(function(row){ var r=recFromRow(row); cloudById[r.id]=r; });
+          // 最近的数据先显示：首页(最新)一到就合并渲染
+          if(!firstDone){ firstDone=true; mergeCloudIntoState(); renderAll(); }
           if(data.length<PAGE){
-            // done — merge and save
+            // done — merge remaining and save
             var localOnly=state.records.filter(function(r){ return !cloudById[r.id]; });
-            var merged={};
-            state.records.forEach(function(r){ merged[r.id]=r; });
-            Object.keys(cloudById).forEach(function(id){ merged[id]=cloudById[id]; });
-            state.records=Object.keys(merged).map(function(k){ return merged[k]; });
+            mergeCloudIntoState();
             save(); renderAll(); setCloudStatus("synced");
             // 分批上传本地独有记录, 避免 15k 并发请求把浏览器锁死
             if(localOnly.length){
@@ -858,7 +880,7 @@ create policy "expenses_all" on public.expenses
       else if(r.type==="transfer"){ if(r.category!=="sav_in") sav+=r.amount; else sav-=r.amount; }
       else exp+=r.amount;
     }
-    $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtMoney(exp)+(inc?(" · 收入 ¥"+fmtMoney(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtMoney(sav)):"");
+    $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtInt(exp)+(inc?(" · 收入 ¥"+fmtInt(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtInt(sav)):"");
 
     if(!rows.length){
       body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
@@ -950,6 +972,20 @@ create policy "expenses_all" on public.expenses
   // ---------------- stats ----------------
   var charts={};
   function ec(id){ if(!charts[id]) charts[id]=echarts.init($("#"+id)); return charts[id]; }
+
+  // 3 张统计卡共用的分类色卡图例（放在卡片上方）
+  var _catLegendDone=false;
+  function renderCatLegend(){
+    var el=$("#catLegend"); if(!el || _catLegendDone) return;
+    function grp(title, cats){
+      return '<div class="lg-grp"><span class="lg-t">'+title+'</span>'
+        + cats.map(function(c){ return '<span class="c"><i style="background:'+c.color+'"></i>'+esc(c.name)+'</span>'; }).join("")
+        + '</div>';
+    }
+    el.innerHTML = grp("支出", EXP_CATS) + grp("收入", INC_CATS) + grp("储蓄/投资", TRA_CATS);
+    _catLegendDone=true;
+  }
+
   var totalState={pieFlow:"expense", startMonth:"", endMonth:""};
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
@@ -993,9 +1029,9 @@ create policy "expenses_all" on public.expenses
       data.sort(function(a,b){ return b.value-a.value; });
     }
     return {
-      tooltip:{trigger:"item", formatter:function(p){ return p.name+"<br/>¥"+fmtMoney(p.value)+" ("+p.percent+"%)"; }},
-      legend:{type:"scroll", bottom:0, textStyle:{fontSize:11}},
-      series:[{ type:"pie", radius:["38%","58%"], center:["50%","42%"], avoidLabelOverlap:true,
+      tooltip:{trigger:"item", formatter:function(p){ return p.name+"<br/>¥"+fmtInt(p.value)+" ("+p.percent+"%)"; }},
+      legend:{show:false},
+      series:[{ type:"pie", radius:["40%","64%"], center:["50%","50%"], avoidLabelOverlap:true,
         minShowLabelAngle:6,
         label:{show:true, formatter:"{b} {d}%", fontSize:10, edgeDistance:"2%"},
         labelLine:{length:8, length2:8},
@@ -1029,7 +1065,7 @@ create policy "expenses_all" on public.expenses
       tooltip:{trigger:"axis", axisPointer:{type:"shadow"},
         formatter:function(ps){
           var s=ps[0].axisValue;
-          ps.forEach(function(p){ s+="<br/>"+p.marker+p.seriesName+": ¥"+fmtMoney(p.data||0); });
+          ps.forEach(function(p){ s+="<br/>"+p.marker+p.seriesName+": ¥"+fmtInt(p.data||0); });
           return s;
         }},
       legend:{data:legendData, top:0, textStyle:{fontSize:11}},
@@ -1101,7 +1137,7 @@ create policy "expenses_all" on public.expenses
   function renderMonth(){
     var pick=$("#monthPick");
     var ms=monthsInRange();
-    if(!monthState.month){ monthState.month = ms[ms.length-1]; }
+    if(!monthState.month){ monthState.month = (ms.indexOf(curMonth())>=0) ? curMonth() : ms[ms.length-1]; }
     // clamp min/max to actual data range
     pick.min = ms[0]; pick.max = ms[ms.length-1];
     if(pick.value!==monthState.month) pick.value=monthState.month;
@@ -1130,7 +1166,7 @@ create policy "expenses_all" on public.expenses
   function renderYear(){
     var ys=yearsAvailable().slice().reverse(); // ascending
     if(!ys.length){ ys=[String(new Date().getFullYear())]; }
-    if(!yearState.year || ys.indexOf(yearState.year)<0) yearState.year=ys[ys.length-1];
+    if(!yearState.year || ys.indexOf(yearState.year)<0) yearState.year=(ys.indexOf(curYear())>=0)?curYear():ys[ys.length-1];
 
     var tabs=$("#yearTabs");
     var sig=ys.join(",");
@@ -1182,7 +1218,7 @@ create policy "expenses_all" on public.expenses
   window.addEventListener("resize", resizeCharts);
 
   // ---------------- render all ----------------
-  function renderAll(){ renderList(); renderStats(); }
+  function renderAll(){ renderCatLegend(); renderList(); renderStats(); }
 
   // ---------------- export / import ----------------
   function exportJSON(){
