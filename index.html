@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>截图记账助手</title>
+<title>记账助手</title>
 <style>
   :root{
     --bg:#f5f6f8; --card:#ffffff; --ink:#1f2430; --sub:#7a8194; --line:#e8eaef;
@@ -90,7 +90,7 @@
   .chart{width:100%; height:260px;}
   .kpis{display:flex; gap:8px; flex-wrap:wrap; margin:2px 0 12px;}
   .kpi{background:var(--chip); border-radius:10px; padding:7px 10px; min-width:0; flex:1 1 calc(50% - 8px);}
-  .kpi .n{font-size:20px; font-weight:700; font-variant-numeric:tabular-nums;}
+  .kpi .n{font-size:16px; font-weight:700; font-variant-numeric:tabular-nums;}
   .kpi .l{font-size:12px; color:var(--sub);}
   .cat-legend{display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;}
   .cat-legend .c{font-size:12px; padding:2px 9px; border-radius:999px; background:var(--chip); cursor:pointer; border:1px solid transparent;}
@@ -114,7 +114,7 @@
 <body>
 <header class="top">
   <div class="top-in">
-    <div class="brand"><span class="dot"></span>截图记账助手</div>
+    <div class="brand"><span class="dot"></span>记账助手</div>
     <div class="top-sp"></div>
     <span id="cloudStatus">● 本地模式</span>
     <button class="btn sm" id="btnExport">导出备份</button>
@@ -127,7 +127,7 @@
 
   <!-- ============ 导入截图 ============ -->
   <section class="card">
-    <h2>① 丢截图进来，自动识别</h2>
+    <h2>丢截图进来，自动识别</h2>
     <p class="hint">支持微信/支付宝账单、各消费 APP 订单、银行卡账单截图。可一次拖多张。OCR 在你本机浏览器里完成，图片不上传。首次识别需联网下载中文模型（约 15–40MB，之后缓存）。</p>
     <div id="drop">
       <div style="font-size:15px;"><b>把截图拖到这里</b>，或点击选择图片</div>
@@ -168,7 +168,14 @@
   <div class="stat-row">
   <!-- ============ 总计 ============ -->
   <section class="card">
-    <h2>② 总计</h2>
+    <h2>总计</h2>
+    <div class="row" style="margin-bottom:8px; gap:6px; align-items:center;">
+      <span class="muted" style="font-size:13px;">起</span>
+      <input type="month" class="ctl" id="totalStart" style="padding:5px 7px;">
+      <span class="muted" style="font-size:13px;">止</span>
+      <input type="month" class="ctl" id="totalEnd" style="padding:5px 7px;">
+      <button class="btn sm" id="totalRangeReset">全部</button>
+    </div>
     <div class="kpis" id="kTotal"></div>
     <div class="stat-grid">
       <div>
@@ -190,7 +197,7 @@
 
   <!-- ============ 月度 ============ -->
   <section class="card">
-    <h2>③ 月度</h2>
+    <h2>月度</h2>
     <div class="row" style="margin-bottom:8px; gap:8px;">
       <span class="muted">月份</span>
       <input type="month" class="ctl" id="monthPick" min="2021-01" max="2026-07">
@@ -218,8 +225,9 @@
 
   <!-- ============ 年度 ============ -->
   <section class="card">
-    <h2>④ 年度</h2>
+    <h2>年度</h2>
     <div class="seg" id="yearTabs" style="margin-bottom:8px; flex-wrap:wrap;"></div>
+    <div id="yearLoad" class="muted" style="font-size:12px; margin:-2px 0 8px; display:none;">⏳ 云端数据加载中，年份可能暂不完整…</div>
     <div class="kpis" id="kYear"></div>
     <div class="stat-grid">
       <div>
@@ -242,7 +250,7 @@
 
   <!-- ============ 明细 ============ -->
   <section class="card">
-    <h2>⑤ 账单明细</h2>
+    <h2>账单明细</h2>
     <div class="filters">
       <select class="ctl" id="fCat"><option value="">全部分类</option></select>
       <select class="ctl" id="fMonth"><option value="">全部月份</option></select>
@@ -397,6 +405,7 @@ create policy "expenses_all" on public.expenses
   function pad(n){ return n<10?"0"+n:""+n; }
   function todayStr(){ var d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
   function fmtMoney(n){ n=Number(n)||0; return n.toLocaleString("zh-CN",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function fmtInt(n){ n=Math.round(Number(n)||0); return n.toLocaleString("zh-CN"); }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
   var toastT;
   function toast(msg,bad){
@@ -435,6 +444,7 @@ create policy "expenses_all" on public.expenses
               synced:["已云同步","#10b981"], offline:["离线·待同步","#ef4444"], nocloud:["本地模式（未建表）","#7a8194"],
               locked:["未解锁","#7a8194"], badsecret:["密钥错误","#ef4444"] };
     var v=map[s]||map.local; el.textContent="● "+v[0]; el.style.color=v[1];
+    var yl=$("#yearLoad"); if(yl) yl.style.display = (s==="connecting") ? "block" : "none";
   }
   function rowFromRec(r){ return { id:r.id, ts:r.date||null, amount:r.amount||0, category:r.category||"other", data:r, updated_at:new Date().toISOString() }; }
   function recFromRow(row){ var r=row.data||{}; r.id=row.id; return r; }
@@ -921,7 +931,7 @@ create policy "expenses_all" on public.expenses
   // ---------------- stats ----------------
   var charts={};
   function ec(id){ if(!charts[id]) charts[id]=echarts.init($("#"+id)); return charts[id]; }
-  var totalState={pieFlow:"expense"};
+  var totalState={pieFlow:"expense", startMonth:"", endMonth:""};
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
 
@@ -934,10 +944,10 @@ create policy "expenses_all" on public.expenses
     var net = inc - exp;
     var netColor = net>=0 ? "#12855a" : "#c0392b";
     return ''
-      +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtMoney(exp)+'</div><div class="l">全部支出</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtInt(exp)+'</div><div class="l">全部支出</div></div>'
       +'<div class="kpi"><div class="n">'+expN.toLocaleString("zh-CN")+'</div><div class="l">支出笔数</div></div>'
-      +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtMoney(inc)+'</div><div class="l">全部收入</div></div>'
-      +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtMoney(Math.abs(net))+'</div><div class="l">收入盈余</div></div>';
+      +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtInt(inc)+'</div><div class="l">全部收入</div></div>'
+      +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtInt(Math.abs(net))+'</div><div class="l">收入盈余</div></div>';
   }
 
   function pieOption(recs, flow){
@@ -960,14 +970,24 @@ create policy "expenses_all" on public.expenses
     return {
       tooltip:{trigger:"item", formatter:function(p){ return p.name+"<br/>¥"+fmtMoney(p.value)+" ("+p.percent+"%)"; }},
       legend:{type:"scroll", bottom:0, textStyle:{fontSize:11}},
-      series:[{ type:"pie", radius:["42%","70%"], center:["50%","44%"], avoidLabelOverlap:true,
-        label:{show:true, formatter:"{b}\n{d}%", fontSize:11},
+      series:[{ type:"pie", radius:["38%","58%"], center:["50%","42%"], avoidLabelOverlap:true,
+        minShowLabelAngle:6,
+        label:{show:true, formatter:"{b} {d}%", fontSize:10, edgeDistance:"2%"},
+        labelLine:{length:8, length2:8},
+        labelLayout:{hideOverlap:true},
         data: data.length ? data : [{name:"暂无",value:1,itemStyle:{color:"#e8eaef"},label:{formatter:"暂无数据"}}]
       }]
     };
   }
 
   function twoBarOption(labels, expArr, incArr){
+    function barLbl(p){
+      var v=p.value;
+      if(!v) return "";
+      if(Math.abs(v)>=10000) return (v/10000).toFixed(v%10000?1:0)+"w";
+      return Math.round(v);
+    }
+    var many=labels.length>15;
     return {
       tooltip:{trigger:"axis", axisPointer:{type:"shadow"},
         formatter:function(ps){
@@ -976,22 +996,46 @@ create policy "expenses_all" on public.expenses
           return s;
         }},
       legend:{data:["支出","收入"], top:0, textStyle:{fontSize:11}},
-      grid:{left:8,right:12,top:30,bottom:24,containLabel:true},
-      xAxis:{type:"category", data:labels, axisLabel:{fontSize:11, interval:labels.length>15?2:0}, axisTick:{show:false}},
+      grid:{left:8,right:12,top:30,bottom:46,containLabel:true},
+      dataZoom:[
+        {type:"inside", start: many?60:0, end:100, zoomOnMouseWheel:true, moveOnMouseMove:true},
+        {type:"slider", height:16, bottom:8, start: many?60:0, end:100, brushSelect:false,
+          handleSize:"120%", fillerColor:"rgba(78,121,167,.18)", borderColor:"#e0e4ea",
+          textStyle:{fontSize:9,color:"#7a8194"}}
+      ],
+      xAxis:{type:"category", data:labels, axisLabel:{fontSize:11, interval:0}, axisTick:{show:false}},
       yAxis:{type:"value", axisLabel:{fontSize:11, formatter:function(v){ if(Math.abs(v)>=10000)return (v/10000).toFixed(v%10000?1:0)+"w"; return v; }}, splitLine:{lineStyle:{color:"#eef0f4"}}},
       series:[
-        {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26},
-        {name:"收入", type:"bar", data:incArr, itemStyle:{color:"#12855a", borderRadius:[4,4,0,0]}, barMaxWidth:26}
+        {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26,
+          label:{show:true, position:"top", fontSize:9, color:"#c0392b", formatter:barLbl}},
+        {name:"收入", type:"bar", data:incArr, itemStyle:{color:"#12855a", borderRadius:[4,4,0,0]}, barMaxWidth:26,
+          label:{show:true, position:"top", fontSize:9, color:"#12855a", formatter:barLbl}}
       ]
     };
   }
 
   // ---- 总计
   function renderTotal(){
-    var recs=state.records;
+    var months=monthsInRange();
+    var sEl=$("#totalStart"), eEl=$("#totalEnd");
+    if(sEl && eEl && months.length){
+      sEl.min=eEl.min=months[0]; sEl.max=eEl.max=months[months.length-1];
+      sEl.value=totalState.startMonth||"";
+      eEl.value=totalState.endMonth||"";
+    }
+    var sm=totalState.startMonth, em=totalState.endMonth;
+    var recs=state.records.filter(function(r){
+      var m=(r.date||"").slice(0,7); if(!m) return false;
+      if(sm && m<sm) return false;
+      if(em && m>em) return false;
+      return true;
+    });
     $("#kTotal").innerHTML=kpiHTML(recs);
     ec("pieTotal").setOption(pieOption(recs,totalState.pieFlow), true);
-    var years=yearsAvailable().slice().reverse(); // ascending
+
+    var yset={};
+    recs.forEach(function(r){ var y=(r.date||"").slice(0,4); if(y) yset[y]=true; });
+    var years=Object.keys(yset).sort();
     if(!years.length){ ec("barTotal").setOption(twoBarOption([""],[0],[0]),true); return; }
     var expByY={}, incByY={};
     years.forEach(function(y){ expByY[y]=0; incByY[y]=0; });
@@ -1163,6 +1207,16 @@ create policy "expenses_all" on public.expenses
       renderReview();
     });
 
+    // 总计 起止月份
+    $("#totalStart").addEventListener("change",function(){
+      totalState.startMonth=$("#totalStart").value||""; renderTotal();
+    });
+    $("#totalEnd").addEventListener("change",function(){
+      totalState.endMonth=$("#totalEnd").value||""; renderTotal();
+    });
+    $("#totalRangeReset").addEventListener("click",function(){
+      totalState.startMonth=""; totalState.endMonth=""; renderTotal();
+    });
     // 月度
     $("#monthPick").addEventListener("change",function(){
       var v=$("#monthPick").value; if(!v) return; monthState.month=v; renderMonth();
