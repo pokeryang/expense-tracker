@@ -312,6 +312,7 @@ create policy "expenses_all" on public.expenses
     {key:"transfer", name:"转账/红包", color:"#D37295", kw:["转账给","微信红包","支付宝转账","付款给","转出","零钱转","还款","信用卡还款","花呗还款","发红包"]},
     {key:"invest",   name:"投资理财", color:"#499894", kw:["基金","股票","定投","理财","证券","申购","买入","债券","券商","招银理财","支付宝理财","朝朝盈","零钱通","黄金定投","积存金","保险","年金","转入余额宝"]},
     {key:"shopping", name:"其他购物", color:"#8CD17D", kw:["淘宝","天猫","京东","拼多多","唯品会","抖音商城","得物","闲鱼","苏宁","亚马逊","网易严选","小米有品","购物","商城"]},
+    {key:"group_pay",name:"群收款",   color:"#B87AB6", kw:["群收款","aa收款","AA收款","aa付款","AA付款","发出群红包","微信aa","微信AA"]},
     {key:"other",    name:"其他支出", color:"#B6992D", kw:[]}
   ];
   // 收入分类
@@ -440,25 +441,37 @@ create policy "expenses_all" on public.expenses
         localStorage.removeItem(SECRET_STORE_KEY);
         showLoginModal("密钥不对，请重新输入"); renderAll(); return;
       }
-      SB.from(TABLE).select("*").then(function(res){
-      if(res.error){
-        // table missing / permission -> graceful local mode
-        console.warn("cloud fetch err",res.error);
-        CLOUD_ON=false;
-        setCloudStatus(/relation|does not exist|not find|schema cache/i.test(res.error.message||"")?"nocloud":"offline");
-        renderAll(); return;
+      // paged fetch: PostgREST caps a single response at 1000 rows,
+      // so keep walking Range windows until a short page is returned.
+      var PAGE=1000, offset=0, cloudById={}, aborted=false;
+      function nextPage(){
+        SB.from(TABLE).select("*").range(offset, offset+PAGE-1).then(function(res){
+          if(res.error){
+            console.warn("cloud fetch err",res.error);
+            CLOUD_ON=false; aborted=true;
+            setCloudStatus(/relation|does not exist|not find|schema cache/i.test(res.error.message||"")?"nocloud":"offline");
+            renderAll(); return;
+          }
+          var data=res.data||[];
+          data.forEach(function(row){ var r=recFromRow(row); cloudById[r.id]=r; });
+          if(data.length<PAGE){
+            // done — merge and save
+            var localOnly=state.records.filter(function(r){ return !cloudById[r.id]; });
+            var merged={};
+            state.records.forEach(function(r){ merged[r.id]=r; });
+            Object.keys(cloudById).forEach(function(id){ merged[id]=cloudById[id]; });
+            state.records=Object.keys(merged).map(function(k){ return merged[k]; });
+            save(); renderAll(); setCloudStatus("synced");
+            localOnly.forEach(function(r){ cloudUpsert(r); });
+            flushOutbox();
+            return;
+          }
+          offset+=PAGE;
+          setCloudStatus("connecting");
+          nextPage();
+        });
       }
-      var cloudById={};
-      (res.data||[]).forEach(function(row){ var r=recFromRow(row); cloudById[r.id]=r; });
-      var localOnly=state.records.filter(function(r){ return !cloudById[r.id]; });
-      var merged={};
-      state.records.forEach(function(r){ merged[r.id]=r; });
-      Object.keys(cloudById).forEach(function(id){ merged[id]=cloudById[id]; });
-      state.records=Object.keys(merged).map(function(k){ return merged[k]; });
-      save(); renderAll(); setCloudStatus("synced");
-      localOnly.forEach(function(r){ cloudUpsert(r); });
-      flushOutbox();
-    });
+      nextPage();
     });
   }
 
