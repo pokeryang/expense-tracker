@@ -75,6 +75,7 @@
   .amount{font-variant-numeric:tabular-nums; font-weight:600;}
   .amount.exp{color:#c0392b;}
   .amount.inc{color:#12855a;}
+  .amount.tra{color:#2a6f7a;}
   .muted{color:var(--sub);}
   .center{text-align:center;}
   .right{text-align:right;}
@@ -184,6 +185,7 @@
           <div class="seg pie-flow" data-scope="total">
             <button data-flow="expense" class="on">支出</button>
             <button data-flow="income">收入</button>
+            <button data-flow="transfer">储蓄/投资</button>
           </div>
         </div>
         <div class="chart" id="pieTotal"></div>
@@ -212,6 +214,7 @@
           <div class="seg pie-flow" data-scope="month">
             <button data-flow="expense" class="on">支出</button>
             <button data-flow="income">收入</button>
+            <button data-flow="transfer">储蓄/投资</button>
           </div>
         </div>
         <div class="chart" id="pieMonth"></div>
@@ -236,6 +239,7 @@
           <div class="seg pie-flow" data-scope="year">
             <button data-flow="expense" class="on">支出</button>
             <button data-flow="income">收入</button>
+            <button data-flow="transfer">储蓄/投资</button>
           </div>
         </div>
         <div class="chart" id="pieYear"></div>
@@ -258,6 +262,7 @@
         <option value="">全部收支</option>
         <option value="expense">仅支出</option>
         <option value="income">仅收入</option>
+        <option value="transfer">仅储蓄/投资</option>
       </select>
       <input class="ctl grow" id="fKw" placeholder="搜索商户 / 说明…" style="min-width:140px;">
       <span class="muted" id="listMeta"></span>
@@ -376,12 +381,19 @@ create policy "expenses_all" on public.expenses
     {key:"inc_salary",   name:"薪酬",       color:"#59A14F", kw:["工资","薪资","薪酬","奖金","年终奖","绩效","提成","劳务","补贴","发薪","代发工资","津贴"]},
     {key:"inc_refund",   name:"返现/退税",   color:"#F28E2B", kw:["返现","返利","退税","赔付","现金奖励","消费奖励"]},
     {key:"inc_transfer", name:"转账/红包",  color:"#E15759", kw:["转账","红包","收款","转入","微信红包","亲属卡","收到","向你转账","给你转账","付款给你","转你","发给你"]},
-    {key:"inc_invest",   name:"投资收入",   color:"#4E79A7", kw:["收益","利息","分红","股息","赎回","卖出","到账","基金收益","理财收益","银行利息","盈利","本金赎回","股票卖出"]},
+    {key:"inc_invest",   name:"投资收入",   color:"#4E79A7", kw:["收益","利息","分红","股息","基金收益","理财收益","银行利息","盈利"]},
     {key:"inc_other",    name:"其他收入",   color:"#B6992D", kw:[]}
   ];
-  var ALL_CATS = EXP_CATS.concat(INC_CATS);
+  // 储蓄/投资流向（本金进出，不计盈余）：sav_out=投出/存入本金，sav_in=赎回/取回本金
+  var TRA_CATS = [
+    {key:"sav_out", name:"投资/储蓄", color:"#499894", kw:["买入","申购","定投","转入理财","投资理财","货币基金申购","银证转账","转出","定存","存入"]},
+    {key:"sav_in",  name:"赎回/取回", color:"#8CD17D", kw:["赎回","本金赎回","取出","转回","银证转入","支取"]}
+  ];
+  var ALL_CATS = EXP_CATS.concat(INC_CATS).concat(TRA_CATS);
   var CAT_BY_KEY = {}; ALL_CATS.forEach(function(c){ CAT_BY_KEY[c.key]=c; });
-  function catsFor(type){ return type==="income"?INC_CATS:EXP_CATS; }
+  function catsFor(type){ return type==="income"?INC_CATS:(type==="transfer"?TRA_CATS:EXP_CATS); }
+  // 由分类 key 反推流向
+  function flowOfCat(k){ if(k==="sav_out"||k==="sav_in") return "transfer"; if((CAT_BY_KEY[k]||{}).key && INC_CATS.some(function(c){return c.key===k;})) return "income"; return "expense"; }
   function catName(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other).name; }
   function catColor(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other).color; }
 
@@ -395,7 +407,7 @@ create policy "expenses_all" on public.expenses
       var c=cats[i];
       for(var j=0;j<c.kw.length;j++){ if(t.indexOf(c.kw[j].toLowerCase())>=0) return c.key; }
     }
-    return type==="income" ? "inc_other" : "other";
+    return type==="income" ? "inc_other" : (type==="transfer" ? "sav_out" : "other");
   }
 
   // ---------------- utils ----------------
@@ -745,7 +757,7 @@ create policy "expenses_all" on public.expenses
         +'<td class="center"><input type="checkbox" class="r-inc" '+(r._include?"checked":"")+'></td>'
         +'<td><input type="date" class="r-date" value="'+esc(r.date)+'"></td>'
         +'<td><input class="amt r-amt" value="'+r.amount+'"></td>'
-        +'<td><select class="r-type"><option value="expense"'+(r.type==="expense"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option></select></td>'
+        +'<td><select class="r-type"><option value="expense"'+(r.type==="expense"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select></td>'
         +'<td><select class="r-cat">'+catOptsFor(r.type,r.category)+'</select></td>'
         +'<td><input class="r-mer" value="'+esc(r.merchant)+'"></td>'
         +'<td><input class="r-src" value="'+esc(r.source)+'" style="width:64px;"></td>'
@@ -840,9 +852,13 @@ create policy "expenses_all" on public.expenses
     }
 
     var body=$("#listBody");
-    var exp=0, inc=0;
-    for(var i=0;i<rows.length;i++){ var r=rows[i]; if(r.type==="income") inc+=r.amount; else exp+=r.amount; }
-    $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtMoney(exp)+(inc?(" · 收入 ¥"+fmtMoney(inc)):"");
+    var exp=0, inc=0, sav=0;
+    for(var i=0;i<rows.length;i++){ var r=rows[i];
+      if(r.type==="income") inc+=r.amount;
+      else if(r.type==="transfer"){ if(r.category!=="sav_in") sav+=r.amount; else sav-=r.amount; }
+      else exp+=r.amount;
+    }
+    $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtMoney(exp)+(inc?(" · 收入 ¥"+fmtMoney(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtMoney(sav)):"");
 
     if(!rows.length){
       body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
@@ -861,11 +877,14 @@ create policy "expenses_all" on public.expenses
     for(var j=0;j<slice.length;j++){
       var r=slice[j];
       var isInc=r.type==="income";
+      var isTra=r.type==="transfer";
       var neg=Number(r.amount)<0;
-      var showInc=isInc||neg;
+      var amtCls, sign;
+      if(isTra){ amtCls="tra"; sign=(r.category==="sav_in")?"←":"→"; }
+      else { var showInc=isInc||neg; amtCls=showInc?"inc":"exp"; sign=showInc?"+":"-"; }
       html[j]='<tr data-id="'+r.id+'">'
         +'<td>'+esc(r.date)+'</td>'
-        +'<td class="right amount '+(showInc?"inc":"exp")+'">'+(showInc?"+":"-")+"¥"+fmtMoney(Math.abs(r.amount))+'</td>'
+        +'<td class="right amount '+amtCls+'">'+sign+"¥"+fmtMoney(Math.abs(r.amount))+'</td>'
         +'<td><span class="tag" style="background:'+catColor(r.category)+'22;color:'+catColor(r.category)+'">'+esc(catName(r.category))+'</span></td>'
         +'<td>'+esc(r.merchant)+(r.note?(' <span class="muted">· '+esc(r.note)+'</span>'):'')+'</td>'
         +'<td class="muted">'+esc(r.source||"")+'</td>'
@@ -896,7 +915,7 @@ create policy "expenses_all" on public.expenses
     tr.innerHTML='<td><input type="date" value="'+esc(r.date)+'" class="e-date"></td>'
       +'<td class="right"><input class="amt e-amt" value="'+r.amount+'" style="width:80px;"></td>'
       +'<td><select class="e-cat">'+catOpts+'</select></td>'
-      +'<td><input class="e-mer" value="'+esc(r.merchant)+'"> <select class="e-type" style="width:70px;"><option value="expense"'+(r.type!=="income"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option></select></td>'
+      +'<td><input class="e-mer" value="'+esc(r.merchant)+'"> <select class="e-type" style="width:84px;"><option value="expense"'+(r.type!=="income"&&r.type!=="transfer"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select></td>'
       +'<td><input class="e-src" value="'+esc(r.source||"")+'" style="width:64px;"></td>'
       +'<td class="right"><button class="icon-btn act-save" title="保存">✔</button><button class="icon-btn act-cancel" title="取消">✕</button></td>';
     $(".e-date",tr).focus();
@@ -936,23 +955,29 @@ create policy "expenses_all" on public.expenses
   var yearState ={year:"",  pieFlow:"expense"};
 
   function kpiHTML(recs){
-    var exp=0, expN=0, inc=0;
+    var exp=0, expN=0, inc=0, savOut=0, savIn=0;
     recs.forEach(function(r){
       if(r.type==="income") inc+=r.amount;
+      else if(r.type==="transfer"){ if(r.category==="sav_in") savIn+=r.amount; else savOut+=r.amount; }
       else { exp+=r.amount; expN++; }
     });
-    var net = inc - exp;
+    var net = inc - exp;                 // 盈余：真实收入 − 真实支出，不含本金进出
     var netColor = net>=0 ? "#12855a" : "#c0392b";
-    return ''
+    var savNet = savOut - savIn;         // 储蓄/投资净额：净投入为正
+    var savColor = savNet>=0 ? "#2a6f7a" : "#b06d00";
+    var html = ''
       +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtInt(exp)+'</div><div class="l">全部支出</div></div>'
-      +'<div class="kpi"><div class="n">'+expN.toLocaleString("zh-CN")+'</div><div class="l">支出笔数</div></div>'
       +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtInt(inc)+'</div><div class="l">全部收入</div></div>'
-      +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtInt(Math.abs(net))+'</div><div class="l">收入盈余</div></div>';
+      +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtInt(Math.abs(net))+'</div><div class="l">收支盈余</div></div>';
+    if(savOut||savIn){
+      html+='<div class="kpi"><div class="n" style="color:'+savColor+'">'+(savNet>=0?"":"−")+'¥'+fmtInt(Math.abs(savNet))+'</div><div class="l">储蓄/投资净额</div></div>';
+    }
+    return html;
   }
 
   function pieOption(recs, flow){
     var byCat={};
-    recs.filter(function(r){ return flow==="income" ? r.type==="income" : r.type!=="income"; })
+    recs.filter(function(r){ return (r.type||"expense")===flow; })
         .forEach(function(r){ byCat[r.category]=(byCat[r.category]||0)+r.amount; });
     var pieCats = catsFor(flow);
     var data = pieCats.filter(function(c){ return byCat[c.key]>0; })
@@ -961,7 +986,7 @@ create policy "expenses_all" on public.expenses
     // 其他 fallback: 若还有 key 不在当前 cats 里（历史数据），归到"其他"
     var known={}; pieCats.forEach(function(c){known[c.key]=true;});
     var extra=0;
-    recs.filter(function(r){ return flow==="income" ? r.type==="income" : r.type!=="income"; })
+    recs.filter(function(r){ return (r.type||"expense")===flow; })
         .forEach(function(r){ if(!known[r.category]) extra += r.amount; });
     if(extra>0){
       data.push({name:"其他", value:Math.round(extra*100)/100, itemStyle:{color:"#B6992D"}});
@@ -980,14 +1005,26 @@ create policy "expenses_all" on public.expenses
     };
   }
 
-  function twoBarOption(labels, expArr, incArr){
+  function twoBarOption(labels, expArr, incArr, savArr){
     function barLbl(p){
       var v=p.value;
       if(!v) return "";
       if(Math.abs(v)>=10000) return (v/10000).toFixed(v%10000?1:0)+"w";
       return Math.round(v);
     }
+    var hasSav = !!(savArr && savArr.some(function(v){ return v>0; }));
     var many=labels.length>15;
+    var legendData = hasSav ? ["支出","收入","储蓄/投资"] : ["支出","收入"];
+    var series=[
+      {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26,
+        label:{show:true, position:"top", fontSize:9, color:"#c0392b", formatter:barLbl}},
+      {name:"收入", type:"bar", data:incArr, itemStyle:{color:"#12855a", borderRadius:[4,4,0,0]}, barMaxWidth:26,
+        label:{show:true, position:"top", fontSize:9, color:"#12855a", formatter:barLbl}}
+    ];
+    if(hasSav){
+      series.push({name:"储蓄/投资", type:"bar", data:savArr, itemStyle:{color:"#499894", borderRadius:[4,4,0,0]}, barMaxWidth:26,
+        label:{show:true, position:"top", fontSize:9, color:"#2a6f7a", formatter:barLbl}});
+    }
     return {
       tooltip:{trigger:"axis", axisPointer:{type:"shadow"},
         formatter:function(ps){
@@ -995,7 +1032,7 @@ create policy "expenses_all" on public.expenses
           ps.forEach(function(p){ s+="<br/>"+p.marker+p.seriesName+": ¥"+fmtMoney(p.data||0); });
           return s;
         }},
-      legend:{data:["支出","收入"], top:0, textStyle:{fontSize:11}},
+      legend:{data:legendData, top:0, textStyle:{fontSize:11}},
       grid:{left:8,right:12,top:30,bottom:46,containLabel:true},
       dataZoom:[
         {type:"inside", start: many?60:0, end:100, zoomOnMouseWheel:true, moveOnMouseMove:true},
@@ -1005,12 +1042,7 @@ create policy "expenses_all" on public.expenses
       ],
       xAxis:{type:"category", data:labels, axisLabel:{fontSize:11, interval:0}, axisTick:{show:false}},
       yAxis:{type:"value", axisLabel:{fontSize:11, formatter:function(v){ if(Math.abs(v)>=10000)return (v/10000).toFixed(v%10000?1:0)+"w"; return v; }}, splitLine:{lineStyle:{color:"#eef0f4"}}},
-      series:[
-        {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26,
-          label:{show:true, position:"top", fontSize:9, color:"#c0392b", formatter:barLbl}},
-        {name:"收入", type:"bar", data:incArr, itemStyle:{color:"#12855a", borderRadius:[4,4,0,0]}, barMaxWidth:26,
-          label:{show:true, position:"top", fontSize:9, color:"#12855a", formatter:barLbl}}
-      ]
+      series:series
     };
   }
 
@@ -1036,17 +1068,20 @@ create policy "expenses_all" on public.expenses
     var yset={};
     recs.forEach(function(r){ var y=(r.date||"").slice(0,4); if(y) yset[y]=true; });
     var years=Object.keys(yset).sort();
-    if(!years.length){ ec("barTotal").setOption(twoBarOption([""],[0],[0]),true); return; }
-    var expByY={}, incByY={};
-    years.forEach(function(y){ expByY[y]=0; incByY[y]=0; });
+    if(!years.length){ ec("barTotal").setOption(twoBarOption([""],[0],[0],[0]),true); return; }
+    var expByY={}, incByY={}, savByY={};
+    years.forEach(function(y){ expByY[y]=0; incByY[y]=0; savByY[y]=0; });
     recs.forEach(function(r){
       var y=(r.date||"").slice(0,4);
       if(!(y in expByY)) return;
-      if(r.type==="income") incByY[y]+=r.amount; else expByY[y]+=r.amount;
+      if(r.type==="income") incByY[y]+=r.amount;
+      else if(r.type==="transfer"){ if(r.category!=="sav_in") savByY[y]+=r.amount; }
+      else expByY[y]+=r.amount;
     });
     var expArr=years.map(function(y){return Math.round(expByY[y]*100)/100;});
     var incArr=years.map(function(y){return Math.round(incByY[y]*100)/100;});
-    ec("barTotal").setOption(twoBarOption(years, expArr, incArr), true);
+    var savArr=years.map(function(y){return Math.round(savByY[y]*100)/100;});
+    ec("barTotal").setOption(twoBarOption(years, expArr, incArr, savArr), true);
   }
 
   // ---- 月度
@@ -1078,15 +1113,17 @@ create policy "expenses_all" on public.expenses
 
     var y=+m.slice(0,4), mo=+m.slice(5,7);
     var days=new Date(y,mo,0).getDate();
-    var labels=[], expArr=[], incArr=[], expByD={}, incByD={};
-    for(var d=1; d<=days; d++){ var k=pad(d); labels.push(k); expByD[k]=0; incByD[k]=0; }
+    var labels=[], expArr=[], incArr=[], savArr=[], expByD={}, incByD={}, savByD={};
+    for(var d=1; d<=days; d++){ var k=pad(d); labels.push(k); expByD[k]=0; incByD[k]=0; savByD[k]=0; }
     recs.forEach(function(r){
       var dd=(r.date||"").slice(8,10);
       if(!(dd in expByD)) return;
-      if(r.type==="income") incByD[dd]+=r.amount; else expByD[dd]+=r.amount;
+      if(r.type==="income") incByD[dd]+=r.amount;
+      else if(r.type==="transfer"){ if(r.category!=="sav_in") savByD[dd]+=r.amount; }
+      else expByD[dd]+=r.amount;
     });
-    labels.forEach(function(k){ expArr.push(Math.round(expByD[k]*100)/100); incArr.push(Math.round(incByD[k]*100)/100); });
-    ec("barMonth").setOption(twoBarOption(labels, expArr, incArr), true);
+    labels.forEach(function(k){ expArr.push(Math.round(expByD[k]*100)/100); incArr.push(Math.round(incByD[k]*100)/100); savArr.push(Math.round(savByD[k]*100)/100); });
+    ec("barMonth").setOption(twoBarOption(labels, expArr, incArr, savArr), true);
   }
 
   // ---- 年度
@@ -1111,15 +1148,17 @@ create policy "expenses_all" on public.expenses
     $("#kYear").innerHTML=kpiHTML(recs);
     ec("pieYear").setOption(pieOption(recs,yearState.pieFlow), true);
 
-    var labels=[], expArr=[], incArr=[], expByM={}, incByM={};
-    for(var mm=1;mm<=12;mm++){ var k=pad(mm); labels.push(k+"月"); expByM[k]=0; incByM[k]=0; }
+    var labels=[], expArr=[], incArr=[], savArr=[], expByM={}, incByM={}, savByM={};
+    for(var mm=1;mm<=12;mm++){ var k=pad(mm); labels.push(k+"月"); expByM[k]=0; incByM[k]=0; savByM[k]=0; }
     recs.forEach(function(r){
       var mo=(r.date||"").slice(5,7);
       if(!(mo in expByM)) return;
-      if(r.type==="income") incByM[mo]+=r.amount; else expByM[mo]+=r.amount;
+      if(r.type==="income") incByM[mo]+=r.amount;
+      else if(r.type==="transfer"){ if(r.category!=="sav_in") savByM[mo]+=r.amount; }
+      else expByM[mo]+=r.amount;
     });
-    for(var mm=1;mm<=12;mm++){ var k=pad(mm); expArr.push(Math.round(expByM[k]*100)/100); incArr.push(Math.round(incByM[k]*100)/100); }
-    ec("barYear").setOption(twoBarOption(labels, expArr, incArr), true);
+    for(var mm=1;mm<=12;mm++){ var k=pad(mm); expArr.push(Math.round(expByM[k]*100)/100); incArr.push(Math.round(incByM[k]*100)/100); savArr.push(Math.round(savByM[k]*100)/100); }
+    ec("barYear").setOption(twoBarOption(labels, expArr, incArr, savArr), true);
   }
 
   function renderStats(){
@@ -1164,7 +1203,7 @@ create policy "expenses_all" on public.expenses
           if(!r || !r.date || r.amount==null) return;
           var sg=sigOf(r.date,r.amount);
           if(sigs[sg]) return;
-          var rtype=r.type==="income"?"income":"expense";
+          var rtype=(r.type==="income"||r.type==="transfer")?r.type:"expense";
           var rec={ id:r.id||uid(), date:r.date, amount:Number(r.amount)||0,
                     type:rtype, category:CAT_BY_KEY[r.category]?r.category:classify((r.merchant||"")+" "+(r.category||""), rtype),
                     merchant:r.merchant||"未识别", source:r.source||"导入", note:r.note||"", raw:r.raw||"",
