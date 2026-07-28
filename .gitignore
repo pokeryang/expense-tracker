@@ -1,0 +1,4 @@
+.DS_Store
+*.swp
+bills/
+final_records.json
