@@ -161,40 +161,82 @@
     </div>
   </section>
 
-  <!-- ============ 统计 ============ -->
+  <!-- ============ 总计 ============ -->
   <section class="card">
-    <h2>② 统计</h2>
-    <div class="row" style="justify-content:space-between; margin-bottom:6px;">
-      <div class="row" style="gap:10px;">
-        <span class="muted">维度</span>
-        <div class="seg" id="dimSeg">
-          <button data-dim="day">按日</button>
-          <button data-dim="month" class="on">按月</button>
-          <button data-dim="year">按年</button>
-        </div>
-        <select class="ctl" id="periodSel"></select>
-        <div class="seg" id="flowSeg" style="margin-left:4px;">
-          <button data-flow="expense" class="on">支出</button>
-          <button data-flow="income">收入</button>
-        </div>
-      </div>
-    </div>
-    <div class="kpis" id="kpis"></div>
+    <h2>② 总计</h2>
+    <div class="kpis" id="kTotal"></div>
     <div class="stat-grid">
       <div>
-        <div class="muted" style="font-size:13px; margin-bottom:4px;">分类占比（饼图）</div>
-        <div class="chart" id="pie"></div>
+        <div class="row" style="justify-content:space-between; margin-bottom:6px;">
+          <div class="muted" style="font-size:13px;">分类占比</div>
+          <div class="seg pie-flow" data-scope="total">
+            <button data-flow="expense" class="on">支出</button>
+            <button data-flow="income">收入</button>
+          </div>
+        </div>
+        <div class="chart" id="pieTotal"></div>
       </div>
       <div>
-        <div class="muted" style="font-size:13px; margin-bottom:4px;" id="barTitle">时间趋势（柱状图）</div>
-        <div class="chart" id="bar"></div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">各年收入 vs 支出</div>
+        <div class="chart" id="barTotal"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 月度 ============ -->
+  <section class="card">
+    <h2>③ 月度</h2>
+    <div class="row" style="margin-bottom:8px; gap:8px;">
+      <span class="muted">月份</span>
+      <input type="month" class="ctl" id="monthPick" min="2021-01" max="2026-07">
+      <button class="btn sm" id="monthPrev">◀ 上月</button>
+      <button class="btn sm" id="monthNext">下月 ▶</button>
+    </div>
+    <div class="kpis" id="kMonth"></div>
+    <div class="stat-grid">
+      <div>
+        <div class="row" style="justify-content:space-between; margin-bottom:6px;">
+          <div class="muted" style="font-size:13px;">当月分类占比</div>
+          <div class="seg pie-flow" data-scope="month">
+            <button data-flow="expense" class="on">支出</button>
+            <button data-flow="income">收入</button>
+          </div>
+        </div>
+        <div class="chart" id="pieMonth"></div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">当月每日收支</div>
+        <div class="chart" id="barMonth"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 年度 ============ -->
+  <section class="card">
+    <h2>④ 年度</h2>
+    <div class="seg" id="yearTabs" style="margin-bottom:8px; flex-wrap:wrap;"></div>
+    <div class="kpis" id="kYear"></div>
+    <div class="stat-grid">
+      <div>
+        <div class="row" style="justify-content:space-between; margin-bottom:6px;">
+          <div class="muted" style="font-size:13px;">当年分类占比</div>
+          <div class="seg pie-flow" data-scope="year">
+            <button data-flow="expense" class="on">支出</button>
+            <button data-flow="income">收入</button>
+          </div>
+        </div>
+        <div class="chart" id="pieYear"></div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">当年各月收支</div>
+        <div class="chart" id="barYear"></div>
       </div>
     </div>
   </section>
 
   <!-- ============ 明细 ============ -->
   <section class="card">
-    <h2>③ 账单明细</h2>
+    <h2>⑤ 账单明细</h2>
     <div class="filters">
       <select class="ctl" id="fCat"><option value="">全部分类</option></select>
       <select class="ctl" id="fMonth"><option value="">全部月份</option></select>
@@ -368,6 +410,10 @@ create policy "expenses_all" on public.expenses
         state.pendingOps=Array.isArray(p.pendingOps)?p.pendingOps:[];
       }
     }catch(e){ console.warn("load failed",e); }
+    // 迁移: 已废弃的"人情来往"合并到"转账/红包"
+    var migrated=0;
+    state.records.forEach(function(r){ if(r.category==="social"){ r.category="transfer"; migrated++; } });
+    if(migrated){ save(); }
   }
   function save(){
     try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
@@ -815,105 +861,183 @@ create policy "expenses_all" on public.expenses
   }
 
   // ---------------- stats ----------------
-  var pieChart=null, barChart=null;
-  var stat={ dim:"month", period:"", flow:"expense" };
+  var charts={};
+  function ec(id){ if(!charts[id]) charts[id]=echarts.init($("#"+id)); return charts[id]; }
+  var totalState={pieFlow:"expense"};
+  var monthState={month:"", pieFlow:"expense"};
+  var yearState ={year:"",  pieFlow:"expense"};
 
-  function periodOptions(){
-    var sel=$("#periodSel"); sel.innerHTML="";
-    var opts=[];
-    if(stat.dim==="day"){
-      opts=monthsAvailable(); if(!opts.length) opts=[todayStr().slice(0,7)];
-      opts.forEach(function(m){ sel.appendChild(new Option(m,m)); });
-    }else if(stat.dim==="month"){
-      opts=yearsAvailable(); if(!opts.length) opts=[String(new Date().getFullYear())];
-      opts.forEach(function(y){ sel.appendChild(new Option(y+" 年",y)); });
-    }else{
-      sel.appendChild(new Option("全部年份","all"));
-    }
-    if(!opts.length) opts=[""];
-    if(opts.indexOf(stat.period)<0) stat.period=(stat.dim==="year")?"all":opts[0];
-    sel.value=stat.period;
-    sel.style.display=(stat.dim==="year")?"none":"";
-  }
-
-  function recsForStat(){
-    return state.records.filter(function(r){
-      if(stat.dim==="day")  return (r.date||"").slice(0,7)===stat.period;
-      if(stat.dim==="month")return (r.date||"").slice(0,4)===stat.period;
-      return true; // year -> all
+  function kpiHTML(recs){
+    var exp=0, expN=0, inc=0;
+    recs.forEach(function(r){
+      if(r.type==="income") inc+=r.amount;
+      else { exp+=r.amount; expN++; }
     });
+    var net = inc - exp;
+    var netColor = net>=0 ? "#12855a" : "#c0392b";
+    return ''
+      +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtMoney(exp)+'</div><div class="l">全部支出</div></div>'
+      +'<div class="kpi"><div class="n">'+expN.toLocaleString("zh-CN")+'</div><div class="l">支出笔数</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtMoney(inc)+'</div><div class="l">全部收入</div></div>'
+      +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtMoney(Math.abs(net))+'</div><div class="l">收入盈余</div></div>';
   }
 
-  function renderStats(){
-    periodOptions();
-    var isInc = stat.flow==="income";
-    var flowWord = isInc?"收入":"支出";
-    var flowColor = isInc?"#12855a":"#4E79A7";
-    function inFlow(r){ return isInc ? r.type==="income" : r.type!=="income"; }
-    if(!window.echarts){
-      var ph='<div class="empty">图表库未加载（可能是网络问题），请联网后刷新页面。明细与识别功能不受影响。</div>';
-      $("#pie").innerHTML=ph; $("#bar").innerHTML="";
-      var recs0=recsForStat().filter(inFlow); var e0=0; recs0.forEach(function(r){ e0+=r.amount; });
-      $("#kpis").innerHTML='<div class="kpi"><div class="n">¥'+fmtMoney(e0)+'</div><div class="l">'+flowWord+'合计</div></div>';
-      return;
-    }
-    var recs=recsForStat().filter(inFlow);
-
-    // KPI
-    var total=0; recs.forEach(function(r){ total+=r.amount; });
-    var label = stat.dim==="day"?stat.period : stat.dim==="month"?(stat.period+"年") : "全部";
-    var khtml='<div class="kpi"><div class="n" style="color:'+flowColor+'">¥'+fmtMoney(total)+'</div><div class="l">'+label+' '+flowWord+'</div></div>';
-    khtml+='<div class="kpi"><div class="n">'+recs.length+'</div><div class="l">'+flowWord+'笔数</div></div>';
-    var avg = recs.length?total/recs.length:0;
-    khtml+='<div class="kpi"><div class="n">¥'+fmtMoney(avg)+'</div><div class="l">笔均'+flowWord+'</div></div>';
-    $("#kpis").innerHTML=khtml;
-
-    // pie: category composition for the selected flow
+  function pieOption(recs, flow){
     var byCat={};
-    recs.forEach(function(r){ byCat[r.category]=(byCat[r.category]||0)+r.amount; });
-    var pieCats = catsFor(stat.flow);
-    var pieData=pieCats.filter(function(c){return byCat[c.key]>0;}).map(function(c){ return {name:c.name, value:Math.round(byCat[c.key]*100)/100, itemStyle:{color:c.color}}; })
-                    .sort(function(a,b){return b.value-a.value;});
-    if(!pieChart) pieChart=echarts.init($("#pie"));
-    pieChart.setOption({
+    recs.filter(function(r){ return flow==="income" ? r.type==="income" : r.type!=="income"; })
+        .forEach(function(r){ byCat[r.category]=(byCat[r.category]||0)+r.amount; });
+    var pieCats = catsFor(flow);
+    var data = pieCats.filter(function(c){ return byCat[c.key]>0; })
+      .map(function(c){ return {name:c.name, value:Math.round(byCat[c.key]*100)/100, itemStyle:{color:c.color}}; })
+      .sort(function(a,b){ return b.value-a.value; });
+    // 其他 fallback: 若还有 key 不在当前 cats 里（历史数据），归到"其他"
+    var known={}; pieCats.forEach(function(c){known[c.key]=true;});
+    var extra=0;
+    recs.filter(function(r){ return flow==="income" ? r.type==="income" : r.type!=="income"; })
+        .forEach(function(r){ if(!known[r.category]) extra += r.amount; });
+    if(extra>0){
+      data.push({name:"其他", value:Math.round(extra*100)/100, itemStyle:{color:"#B6992D"}});
+      data.sort(function(a,b){ return b.value-a.value; });
+    }
+    return {
       tooltip:{trigger:"item", formatter:function(p){ return p.name+"<br/>¥"+fmtMoney(p.value)+" ("+p.percent+"%)"; }},
       legend:{type:"scroll", bottom:0, textStyle:{fontSize:11}},
       series:[{ type:"pie", radius:["42%","70%"], center:["50%","44%"], avoidLabelOverlap:true,
         label:{show:true, formatter:"{b}\n{d}%", fontSize:11},
-        data: pieData.length?pieData:[{name:"暂无"+flowWord,value:1,itemStyle:{color:"#e8eaef"},label:{formatter:"暂无数据"}}]
+        data: data.length ? data : [{name:"暂无",value:1,itemStyle:{color:"#e8eaef"},label:{formatter:"暂无数据"}}]
       }]
-    }, true);
-
-    // bar: time trend
-    var buckets={}, order=[];
-    if(stat.dim==="day"){
-      var ym=stat.period, y=+ym.slice(0,4), mo=+ym.slice(5,7);
-      var days=new Date(y,mo,0).getDate();
-      for(var d=1; d<=days; d++){ var key=pad(d); order.push(key); buckets[key]=0; }
-      recs.forEach(function(r){ var dd=(r.date||"").slice(8,10); if(buckets[dd]!=null) buckets[dd]+=r.amount; });
-      $("#barTitle").textContent=ym+" 每日"+flowWord+"（柱状图）";
-    }else if(stat.dim==="month"){
-      for(var m=1;m<=12;m++){ var k=pad(m); order.push(k); buckets[k]=0; }
-      recs.forEach(function(r){ var mm=(r.date||"").slice(5,7); if(buckets[mm]!=null) buckets[mm]+=r.amount; });
-      $("#barTitle").textContent=stat.period+" 年每月"+flowWord+"（柱状图）";
-    }else{
-      var ys=yearsAvailable().slice().reverse(); if(!ys.length) ys=[String(new Date().getFullYear())];
-      ys.forEach(function(yy){ order.push(yy); buckets[yy]=0; });
-      recs.forEach(function(r){ var yy=(r.date||"").slice(0,4); if(buckets[yy]!=null) buckets[yy]+=r.amount; });
-      $("#barTitle").textContent="各年"+flowWord+"（柱状图）";
-    }
-    var barVals=order.map(function(k){ return Math.round((buckets[k]||0)*100)/100; });
-    if(!barChart) barChart=echarts.init($("#bar"));
-    barChart.setOption({
-      tooltip:{trigger:"axis", formatter:function(ps){ var p=ps[0]; return p.axisValue+"<br/>¥"+fmtMoney(p.data); }},
-      grid:{left:8,right:12,top:18,bottom:24,containLabel:true},
-      xAxis:{type:"category", data:order, axisLabel:{fontSize:11, interval: stat.dim==="day"?2:0}, axisTick:{show:false}},
-      yAxis:{type:"value", axisLabel:{fontSize:11, formatter:function(v){ return v>=10000?(v/10000+"w"):v; }}, splitLine:{lineStyle:{color:"#eef0f4"}}},
-      series:[{ type:"bar", data:barVals, itemStyle:{color:flowColor, borderRadius:[4,4,0,0]}, barMaxWidth:36 }]
-    }, true);
+    };
   }
 
-  function resizeCharts(){ if(pieChart)pieChart.resize(); if(barChart)barChart.resize(); }
+  function twoBarOption(labels, expArr, incArr){
+    return {
+      tooltip:{trigger:"axis", axisPointer:{type:"shadow"},
+        formatter:function(ps){
+          var s=ps[0].axisValue;
+          ps.forEach(function(p){ s+="<br/>"+p.marker+p.seriesName+": ¥"+fmtMoney(p.data||0); });
+          return s;
+        }},
+      legend:{data:["支出","收入"], top:0, textStyle:{fontSize:11}},
+      grid:{left:8,right:12,top:30,bottom:24,containLabel:true},
+      xAxis:{type:"category", data:labels, axisLabel:{fontSize:11, interval:labels.length>15?2:0}, axisTick:{show:false}},
+      yAxis:{type:"value", axisLabel:{fontSize:11, formatter:function(v){ if(Math.abs(v)>=10000)return (v/10000).toFixed(v%10000?1:0)+"w"; return v; }}, splitLine:{lineStyle:{color:"#eef0f4"}}},
+      series:[
+        {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26},
+        {name:"收入", type:"bar", data:incArr, itemStyle:{color:"#12855a", borderRadius:[4,4,0,0]}, barMaxWidth:26}
+      ]
+    };
+  }
+
+  // ---- 总计
+  function renderTotal(){
+    var recs=state.records;
+    $("#kTotal").innerHTML=kpiHTML(recs);
+    ec("pieTotal").setOption(pieOption(recs,totalState.pieFlow), true);
+    var years=yearsAvailable().slice().reverse(); // ascending
+    if(!years.length){ ec("barTotal").setOption(twoBarOption([""],[0],[0]),true); return; }
+    var expByY={}, incByY={};
+    years.forEach(function(y){ expByY[y]=0; incByY[y]=0; });
+    recs.forEach(function(r){
+      var y=(r.date||"").slice(0,4);
+      if(!(y in expByY)) return;
+      if(r.type==="income") incByY[y]+=r.amount; else expByY[y]+=r.amount;
+    });
+    var expArr=years.map(function(y){return Math.round(expByY[y]*100)/100;});
+    var incArr=years.map(function(y){return Math.round(incByY[y]*100)/100;});
+    ec("barTotal").setOption(twoBarOption(years, expArr, incArr), true);
+  }
+
+  // ---- 月度
+  function monthsInRange(){
+    // dataset range: earliest → latest, plus current month
+    var yms={};
+    state.records.forEach(function(r){ var m=(r.date||"").slice(0,7); if(m) yms[m]=true; });
+    var arr=Object.keys(yms).sort();
+    if(!arr.length){ var t=todayStr().slice(0,7); arr=[t]; }
+    return arr;
+  }
+  function shiftMonth(m, d){
+    var y=+m.slice(0,4), mo=+m.slice(5,7)+d;
+    while(mo<1){ y--; mo+=12; } while(mo>12){ y++; mo-=12; }
+    return y+"-"+pad(mo);
+  }
+  function renderMonth(){
+    var pick=$("#monthPick");
+    var ms=monthsInRange();
+    if(!monthState.month){ monthState.month = ms[ms.length-1]; }
+    // clamp min/max to actual data range
+    pick.min = ms[0]; pick.max = ms[ms.length-1];
+    if(pick.value!==monthState.month) pick.value=monthState.month;
+
+    var m=monthState.month;
+    var recs=state.records.filter(function(r){ return (r.date||"").slice(0,7)===m; });
+    $("#kMonth").innerHTML=kpiHTML(recs);
+    ec("pieMonth").setOption(pieOption(recs,monthState.pieFlow), true);
+
+    var y=+m.slice(0,4), mo=+m.slice(5,7);
+    var days=new Date(y,mo,0).getDate();
+    var labels=[], expArr=[], incArr=[], expByD={}, incByD={};
+    for(var d=1; d<=days; d++){ var k=pad(d); labels.push(k); expByD[k]=0; incByD[k]=0; }
+    recs.forEach(function(r){
+      var dd=(r.date||"").slice(8,10);
+      if(!(dd in expByD)) return;
+      if(r.type==="income") incByD[dd]+=r.amount; else expByD[dd]+=r.amount;
+    });
+    labels.forEach(function(k){ expArr.push(Math.round(expByD[k]*100)/100); incArr.push(Math.round(incByD[k]*100)/100); });
+    ec("barMonth").setOption(twoBarOption(labels, expArr, incArr), true);
+  }
+
+  // ---- 年度
+  function renderYear(){
+    var ys=yearsAvailable().slice().reverse(); // ascending
+    if(!ys.length){ ys=[String(new Date().getFullYear())]; }
+    if(!yearState.year || ys.indexOf(yearState.year)<0) yearState.year=ys[ys.length-1];
+
+    var tabs=$("#yearTabs");
+    var sig=ys.join(",");
+    if(tabs.dataset.sig!==sig){
+      tabs.innerHTML = ys.map(function(y){
+        return '<button data-year="'+y+'"'+(y===yearState.year?' class="on"':'')+'>'+y+'</button>';
+      }).join("");
+      tabs.dataset.sig=sig;
+    }else{
+      $$("#yearTabs button").forEach(function(b){ b.classList.toggle("on", b.getAttribute("data-year")===yearState.year); });
+    }
+
+    var y=yearState.year;
+    var recs=state.records.filter(function(r){ return (r.date||"").slice(0,4)===y; });
+    $("#kYear").innerHTML=kpiHTML(recs);
+    ec("pieYear").setOption(pieOption(recs,yearState.pieFlow), true);
+
+    var labels=[], expArr=[], incArr=[], expByM={}, incByM={};
+    for(var mm=1;mm<=12;mm++){ var k=pad(mm); labels.push(k+"月"); expByM[k]=0; incByM[k]=0; }
+    recs.forEach(function(r){
+      var mo=(r.date||"").slice(5,7);
+      if(!(mo in expByM)) return;
+      if(r.type==="income") incByM[mo]+=r.amount; else expByM[mo]+=r.amount;
+    });
+    for(var mm=1;mm<=12;mm++){ var k=pad(mm); expArr.push(Math.round(expByM[k]*100)/100); incArr.push(Math.round(incByM[k]*100)/100); }
+    ec("barYear").setOption(twoBarOption(labels, expArr, incArr), true);
+  }
+
+  function renderStats(){
+    if(!window.echarts){
+      ["pieTotal","barTotal","pieMonth","barMonth","pieYear","barYear"].forEach(function(id){
+        var el=$("#"+id); if(el) el.innerHTML='<div class="empty">图表库未加载，请联网后刷新。</div>';
+      });
+      // still render KPI without echarts
+      $("#kTotal").innerHTML=kpiHTML(state.records);
+      var m=monthState.month||(state.records[0]&&(state.records[0].date||"").slice(0,7))||todayStr().slice(0,7);
+      $("#kMonth").innerHTML=kpiHTML(state.records.filter(function(r){return (r.date||"").slice(0,7)===m;}));
+      $("#kYear").innerHTML=kpiHTML(state.records.filter(function(r){return (r.date||"").slice(0,4)===(yearState.year||m.slice(0,4));}));
+      return;
+    }
+    renderTotal();
+    renderMonth();
+    renderYear();
+  }
+
+  function resizeCharts(){ Object.keys(charts).forEach(function(k){ try{ charts[k].resize(); }catch(e){} }); }
   window.addEventListener("resize", resizeCharts);
 
   // ---------------- render all ----------------
@@ -981,16 +1105,31 @@ create policy "expenses_all" on public.expenses
       renderReview();
     });
 
-    $("#dimSeg").addEventListener("click",function(e){
-      var b=e.target.closest("button[data-dim]"); if(!b) return;
-      $$("#dimSeg button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
-      stat.dim=b.getAttribute("data-dim"); stat.period=""; renderStats();
+    // 月度
+    $("#monthPick").addEventListener("change",function(){
+      var v=$("#monthPick").value; if(!v) return; monthState.month=v; renderMonth();
     });
-    $("#periodSel").addEventListener("change",function(){ stat.period=$("#periodSel").value; renderStats(); });
-    $("#flowSeg").addEventListener("click",function(e){
-      var b=e.target.closest("button[data-flow]"); if(!b) return;
-      $$("#flowSeg button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
-      stat.flow=b.getAttribute("data-flow"); renderStats();
+    $("#monthPrev").addEventListener("click",function(){
+      monthState.month = shiftMonth(monthState.month, -1); renderMonth();
+    });
+    $("#monthNext").addEventListener("click",function(){
+      monthState.month = shiftMonth(monthState.month, +1); renderMonth();
+    });
+    // 年度 tabs (event delegation)
+    $("#yearTabs").addEventListener("click",function(e){
+      var b=e.target.closest("button[data-year]"); if(!b) return;
+      yearState.year=b.getAttribute("data-year"); renderYear();
+    });
+    // 三个饼图的 支出|收入 切换
+    document.querySelectorAll(".pie-flow").forEach(function(seg){
+      seg.addEventListener("click",function(e){
+        var b=e.target.closest("button[data-flow]"); if(!b) return;
+        var scope=seg.getAttribute("data-scope"); var flow=b.getAttribute("data-flow");
+        seg.querySelectorAll("button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
+        if(scope==="total"){ totalState.pieFlow=flow; renderTotal(); }
+        else if(scope==="month"){ monthState.pieFlow=flow; renderMonth(); }
+        else if(scope==="year"){ yearState.pieFlow=flow; renderYear(); }
+      });
     });
 
     ["fCat","fMonth","fType"].forEach(function(id){ $("#"+id).addEventListener("change",renderList); });
