@@ -263,6 +263,7 @@
         <tbody id="listBody"></tbody>
       </table>
     </div>
+    <div class="filters" id="listPager" style="margin-top:12px; align-items:center; gap:6px;"></div>
 
     <details class="setup">
       <summary>云同步设置（Supabase + 密钥门；换设备/清缓存需重新输入密钥）</summary>
@@ -507,7 +508,17 @@ create policy "expenses_all" on public.expenses
             Object.keys(cloudById).forEach(function(id){ merged[id]=cloudById[id]; });
             state.records=Object.keys(merged).map(function(k){ return merged[k]; });
             save(); renderAll(); setCloudStatus("synced");
-            localOnly.forEach(function(r){ cloudUpsert(r); });
+            // 分批上传本地独有记录, 避免 15k 并发请求把浏览器锁死
+            if(localOnly.length){
+              var _i=0, _batch=50;
+              (function pump(){
+                if(_i>=localOnly.length) return;
+                var end=Math.min(_i+_batch, localOnly.length);
+                for(var k=_i;k<end;k++){ cloudUpsert(localOnly[k]); }
+                _i=end;
+                setTimeout(pump, 150);
+              })();
+            }
             flushOutbox();
             return;
           }
@@ -798,19 +809,45 @@ create policy "expenses_all" on public.expenses
     }).sort(function(a,b){ return (b.date||"").localeCompare(a.date||"") || (b.createdAt||0)-(a.createdAt||0); });
   }
 
+  var listState={page:1, pageSize:100, _sig:"", _rows:[]};
+
   function renderList(){
     renderFilters();
-    var rows=filteredRecords();
+    var cat=$("#fCat").value, mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
+    var sig=[cat,mon,typ,kw,state.records.length].join("|");
+    var rows;
+    if(sig===listState._sig){
+      rows=listState._rows;
+    }else{
+      rows=filteredRecords();
+      listState._sig=sig; listState._rows=rows; listState.page=1;
+    }
+
     var body=$("#listBody");
     var exp=0, inc=0;
-    rows.forEach(function(r){ if(r.type==="income") inc+=r.amount; else exp+=r.amount; });
+    for(var i=0;i<rows.length;i++){ var r=rows[i]; if(r.type==="income") inc+=r.amount; else exp+=r.amount; }
     $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtMoney(exp)+(inc?(" · 收入 ¥"+fmtMoney(inc)):"");
-    if(!rows.length){ body.innerHTML='<tr><td colspan="6"><div class="empty">还没有记录。丢几张账单截图进来，或点「手动添加」。</div></td></tr>'; return; }
-    body.innerHTML=rows.map(function(r){
+
+    if(!rows.length){
+      body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
+      var pg0=$("#listPager"); if(pg0) pg0.innerHTML="";
+      return;
+    }
+
+    var pageSize=listState.pageSize;
+    var totalPages=Math.max(1, Math.ceil(rows.length/pageSize));
+    if(listState.page>totalPages) listState.page=totalPages;
+    if(listState.page<1) listState.page=1;
+    var start=(listState.page-1)*pageSize;
+    var slice=rows.slice(start, start+pageSize);
+
+    var html=new Array(slice.length);
+    for(var j=0;j<slice.length;j++){
+      var r=slice[j];
       var isInc=r.type==="income";
-      var neg=Number(r.amount)<0;                 // 退款冲减: 支出类但金额为负=钱退回
-      var showInc=isInc||neg;                      // 显示为"收入色/正号"
-      return '<tr data-id="'+r.id+'">'
+      var neg=Number(r.amount)<0;
+      var showInc=isInc||neg;
+      html[j]='<tr data-id="'+r.id+'">'
         +'<td>'+esc(r.date)+'</td>'
         +'<td class="right amount '+(showInc?"inc":"exp")+'">'+(showInc?"+":"-")+"¥"+fmtMoney(Math.abs(r.amount))+'</td>'
         +'<td><span class="tag" style="background:'+catColor(r.category)+'22;color:'+catColor(r.category)+'">'+esc(catName(r.category))+'</span></td>'
@@ -818,7 +855,22 @@ create policy "expenses_all" on public.expenses
         +'<td class="muted">'+esc(r.source||"")+'</td>'
         +'<td class="right"><button class="icon-btn act-edit" title="编辑">✎</button><button class="icon-btn act-del" title="删除">🗑</button></td>'
         +'</tr>';
-    }).join("");
+    }
+    body.innerHTML=html.join("");
+
+    // pager
+    var pg=$("#listPager"); if(!pg) return;
+    if(totalPages<=1){ pg.innerHTML=""; return; }
+    pg.innerHTML=''
+      +'<button class="btn sm" data-pg="first" '+(listState.page<=1?"disabled":"")+'>« 首页</button>'
+      +'<button class="btn sm" data-pg="prev"  '+(listState.page<=1?"disabled":"")+'>‹ 上一页</button>'
+      +'<span class="muted">第 <b>'+listState.page+'</b> / '+totalPages+' 页 · 共 '+rows.length+' 笔</span>'
+      +'<button class="btn sm" data-pg="next"  '+(listState.page>=totalPages?"disabled":"")+'>下一页 ›</button>'
+      +'<button class="btn sm" data-pg="last"  '+(listState.page>=totalPages?"disabled":"")+'>末页 »</button>'
+      +'<span class="muted" style="margin-left:auto;">每页</span>'
+      +'<select class="ctl" id="pageSizeSel">'
+        +[50,100,200,500].map(function(n){return '<option value="'+n+'"'+(n===pageSize?" selected":"")+'>'+n+' 条</option>';}).join("")
+      +'</select>';
   }
 
   function editRecord(id){
@@ -1133,8 +1185,36 @@ create policy "expenses_all" on public.expenses
     });
 
     ["fCat","fMonth","fType"].forEach(function(id){ $("#"+id).addEventListener("change",renderList); });
-    $("#fKw").addEventListener("input",renderList);
+    var _kwT=0;
+    $("#fKw").addEventListener("input",function(){
+      clearTimeout(_kwT);
+      _kwT=setTimeout(renderList,200);
+    });
     $("#btnAddManual").addEventListener("click",addManual);
+
+    // 分页控件
+    $("#listPager").addEventListener("click",function(e){
+      var b=e.target.closest("button[data-pg]"); if(!b || b.disabled) return;
+      var pg=b.getAttribute("data-pg");
+      var rows=listState._rows||[];
+      var total=Math.max(1, Math.ceil(rows.length/listState.pageSize));
+      if(pg==="first") listState.page=1;
+      else if(pg==="prev") listState.page=Math.max(1, listState.page-1);
+      else if(pg==="next") listState.page=Math.min(total, listState.page+1);
+      else if(pg==="last") listState.page=total;
+      // 保持同一份 rows(不重算 filter)
+      var _sig=listState._sig;
+      renderList();
+      // renderList 在 sig 不变时会复用 rows，无副作用
+      _sig=_sig;
+    });
+    $("#listPager").addEventListener("change",function(e){
+      if(e.target.id==="pageSizeSel"){
+        listState.pageSize=parseInt(e.target.value,10)||100;
+        listState.page=1;
+        renderList();
+      }
+    });
 
     $("#listBody").addEventListener("click",function(e){
       var tr=e.target.closest("tr[data-id]"); if(!tr) return; var id=tr.getAttribute("data-id");
