@@ -297,41 +297,6 @@
       </table>
     </div>
     <div class="filters" id="listPager" style="margin-top:12px; align-items:center; gap:6px;"></div>
-
-    <details class="setup">
-      <summary>云同步设置（Supabase + 密钥门；换设备/清缓存需重新输入密钥）</summary>
-      <p class="hint" style="margin:10px 0 6px;">数据存 Supabase 的 <b><code>expenses</code> 表</b>（与 daily-records 的 records 表隔离）。为了防止有人从公开的前端源码扒到 Supabase URL+key 就能读写你的账单，本页在数据库侧开了 <b>RLS + 共享密钥</b>：必须请求头带正确密钥才能读写，否则一律拒绝。首次使用请把下面这段 SQL 完整粘到 Supabase 控制台 SQL Editor 执行一次（含密钥），然后在弹窗里输入同一密钥即可解锁；密钥只存本机浏览器 localStorage，不会上传到 GitHub。</p>
-      <pre class="sql" id="sqlBox">-- 1) 建表
-create table if not exists public.expenses (
-  id text primary key,
-  ts date,
-  amount numeric,
-  category text,
-  data jsonb,
-  updated_at timestamptz default now()
-);
-
--- 2) 密钥校验函数（RLS policy + verify RPC 都靠它）
-create or replace function public.verify_expense_secret() returns boolean
-  language sql stable
-  as $$
-    select current_setting('request.headers', true)::json->>'x-app-secret'
-         = '3IaUwV1fOzZCpwKdERumRKfWp70wYU_HxdqCC5lq-y4'
-  $$;
-grant execute on function public.verify_expense_secret() to anon, authenticated;
-
--- 3) 开 RLS，仅密钥正确时可读写
-alter table public.expenses enable row level security;
-drop policy if exists "expenses_all" on public.expenses;
-create policy "expenses_all" on public.expenses
-  for all to anon, authenticated
-  using (public.verify_expense_secret())
-  with check (public.verify_expense_secret());</pre>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn sm" id="btnCopySql">复制 SQL</button>
-        <button class="btn sm" id="btnResetSecret" style="background:#fff5f5;color:#c53030;border:1px solid #fbb;">重置密钥</button>
-      </div>
-    </details>
   </section>
 
   <div class="foot" id="foot">数据实时同步到云端（Supabase expenses 表），本机浏览器同时留一份缓存做离线兜底。建议偶尔「导出备份」为 JSON 存档。</div>
@@ -340,7 +305,7 @@ create policy "expenses_all" on public.expenses
 <div id="loginModal" style="display:none;position:fixed;inset:0;background:rgba(20,25,35,.55);z-index:200;align-items:center;justify-content:center;">
   <div style="background:#fff;padding:22px 24px;border-radius:12px;min-width:280px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,.2);">
     <div style="font-weight:600;font-size:15px;margin-bottom:10px;">🔒 输入云端密钥</div>
-    <div id="loginHint" style="font-size:12px;color:#7a8194;line-height:1.5;margin-bottom:12px;">仅存本机浏览器，不会上传 GitHub。首次使用请先在 Supabase 控制台跑一次页面「云同步设置」里的 SQL 建函数+RLS。</div>
+    <div id="loginHint" style="font-size:12px;color:#7a8194;line-height:1.5;margin-bottom:12px;">请输入与数据库端一致的 app secret 解锁云同步。密钥仅存本机浏览器，不会上传 GitHub。忘记密钥可在 Supabase 控制台查看 verify_expense_secret 函数。</div>
     <input id="loginInput" type="password" placeholder="app secret" autocomplete="off" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;">
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
       <button class="btn sm" id="btnLoginSkip" style="background:#eef1f6;color:#4b5563;">先离线用</button>
@@ -1370,20 +1335,6 @@ create policy "expenses_all" on public.expenses
     $("#btnExport").addEventListener("click",exportJSON);
     $("#btnImport").addEventListener("click",function(){ $("#fileImport").click(); });
     $("#fileImport").addEventListener("change",function(){ if(this.files[0]) importJSON(this.files[0]); this.value=""; });
-    $("#btnCopySql").addEventListener("click",function(){
-      var t=$("#sqlBox").textContent;
-      if(navigator.clipboard) navigator.clipboard.writeText(t).then(function(){toast("SQL 已复制");},function(){toast("复制失败，请手动选择",true);});
-      else toast("请手动选择复制",true);
-    });
-    var btnReset=document.getElementById("btnResetSecret");
-    if(btnReset){
-      btnReset.addEventListener("click",function(){
-        localStorage.removeItem(SECRET_STORE_KEY);
-        CLOUD_ON=false; SB=null;
-        setCloudStatus("locked");
-        showLoginModal("已清除本机密钥，可重新输入");
-      });
-    }
     var btnOk=document.getElementById("btnLoginOk");
     if(btnOk){
       btnOk.addEventListener("click",function(){
