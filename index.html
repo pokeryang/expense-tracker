@@ -754,7 +754,7 @@
       return '<tr class="'+(r._dup?"dup":"")+'" data-i="'+i+'">'
         +'<td class="center"><input type="checkbox" class="r-inc" '+(r._include?"checked":"")+'></td>'
         +'<td><input type="date" class="r-date" value="'+esc(r.date)+'"></td>'
-        +'<td><input class="amt r-amt" value="'+r.amount+'"></td>'
+        +'<td><input type="number" min="0" step="0.01" inputmode="decimal" class="amt r-amt" value="'+Math.abs(r.amount)+'" oninput="this.value=this.value.replace(/-/g,\'\')"></td>'
         +'<td><select class="r-type"><option value="expense"'+(r.type==="expense"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select></td>'
         +'<td><select class="r-cat">'+catOptsFor(r.type,r.category)+'</select></td>'
         +'<td><input class="r-mer" value="'+esc(r.merchant)+'"></td>'
@@ -921,7 +921,7 @@
     var tr=$('#listBody tr[data-id="'+id+'"]'); if(!tr) return;
     var catOpts=catsFor(r.type).map(function(c){return '<option value="'+c.key+'"'+(c.key===r.category?" selected":"")+'>'+c.name+'</option>';}).join("");
     tr.innerHTML='<td><input type="date" value="'+esc(r.date)+'" class="e-date"></td>'
-      +'<td class="right"><input class="amt e-amt" value="'+r.amount+'" style="width:80px;"></td>'
+      +'<td class="right"><input type="number" min="0" step="0.01" inputmode="decimal" class="amt e-amt" value="'+Math.abs(r.amount)+'" style="width:80px;" oninput="this.value=this.value.replace(/-/g,\'\')"></td>'
       +'<td><select class="e-cat">'+catOpts+'</select></td>'
       +'<td><input class="e-mer" value="'+esc(r.merchant)+'"> <select class="e-type" style="width:84px;"><option value="expense"'+(r.type!=="income"&&r.type!=="transfer"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select><input class="e-note" value="'+esc(r.note||"")+'" placeholder="备注（可选）" style="margin-top:5px;"></td>'
       +'<td><input class="e-src" value="'+esc(r.source||"")+'" style="width:64px;"></td>'
