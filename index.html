@@ -120,6 +120,15 @@
   .icon-btn{border:0;background:transparent;cursor:pointer;color:var(--sub);font-size:14px;padding:3px 6px;border-radius:6px;}
   .icon-btn:hover{background:var(--chip); color:var(--ink);}
   .filters{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;}
+  .catbar{display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin:-2px 0 12px; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--chip);}
+  .catbar .cb-tools{display:flex; gap:6px; align-items:center; margin-right:4px;}
+  .catbar .cb-lbl{font-size:12.5px; color:var(--sub); margin-right:2px;}
+  .cchip{display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12.5px; cursor:pointer; user-select:none; border:1px solid transparent; background:#fff; color:#8a90a0; transition:all .12s;}
+  .cchip .dot{width:8px; height:8px; border-radius:50%; opacity:.35;}
+  .cchip.on{color:#fff; font-weight:600;}
+  .cchip.on .dot{opacity:1; background:#fff !important;}
+  .cchip:not(.on){border-color:var(--line);}
+  .cchip:hover{filter:brightness(.97);}
   .foot{color:var(--sub); font-size:12.5px; text-align:center; margin:26px 0 6px;}
   input[type=file]{display:none;}
 </style>
@@ -272,7 +281,6 @@
   <section class="card">
     <h2>账单明细</h2>
     <div class="filters">
-      <select class="ctl" id="fCat"><option value="">全部分类</option></select>
       <select class="ctl" id="fMonth"><option value="">全部月份</option></select>
       <select class="ctl" id="fType">
         <option value="">全部收支</option>
@@ -289,6 +297,7 @@
       <span class="top-sp"></span>
       <button class="btn sm" id="btnAddManual">+ 手动添加</button>
     </div>
+    <div class="catbar" id="catBar"></div>
     <div style="overflow:auto;">
       <table class="flist">
         <thead><tr>
@@ -808,31 +817,54 @@
     return Object.keys(set).filter(Boolean).sort().reverse();
   }
 
+  // 多选类目筛选状态：catSel 为选中的类目 key 集合（在集合内的类目才显示）
+  var catSel=new Set();
+  var catBarInit=false;
+  function catKeysPresent(){
+    var seen={};
+    state.records.forEach(function(r){ if(r.category) seen[r.category]=true; });
+    // 按 ALL_CATS 的定义顺序排列，只保留数据里出现过的类目
+    return ALL_CATS.map(function(c){return c.key;}).filter(function(k){return seen[k];});
+  }
+  function renderCatBar(){
+    var bar=$("#catBar"); if(!bar) return;
+    var keys=catKeysPresent();
+    if(!catBarInit && keys.length){ keys.forEach(function(k){ catSel.add(k); }); catBarInit=true; }
+    // 清掉集合里已不存在的类目
+    Array.from(catSel).forEach(function(k){ if(keys.indexOf(k)<0) catSel.delete(k); });
+    var cnt={}; state.records.forEach(function(r){ cnt[r.category]=(cnt[r.category]||0)+1; });
+    var html='<div class="cb-tools">'
+      +'<span class="cb-lbl">类目</span>'
+      +'<button class="btn sm ghost" data-cb="all">全选</button>'
+      +'<button class="btn sm ghost" data-cb="invert">反选</button>'
+      +'<button class="btn sm ghost" data-cb="none">清空</button>'
+      +'</div>';
+    keys.forEach(function(k){
+      var on=catSel.has(k), col=catColor(k);
+      var st=on?('background:'+col+';border-color:'+col+';'):'';
+      html+='<span class="cchip'+(on?' on':'')+'" data-k="'+k+'" style="'+st+'">'
+        +'<span class="dot" style="background:'+col+'"></span>'
+        +catName(k)+' <span style="opacity:.7;font-weight:400;">'+(cnt[k]||0)+'</span></span>';
+    });
+    bar.innerHTML=html;
+  }
+
   function renderFilters(){
-    var fc=$("#fCat");
-    if(fc.options.length<=1){
-      function addGroup(label,cats){
-        var og=document.createElement("optgroup"); og.label=label;
-        cats.forEach(function(c){ var o=document.createElement("option"); o.value=c.key; o.textContent=c.name; og.appendChild(o); });
-        fc.appendChild(og);
-      }
-      addGroup("支出", EXP_CATS);
-      addGroup("收入", INC_CATS);
-    }
+    renderCatBar();
     var fm=$("#fMonth"); var cur=fm.value;
     fm.innerHTML='<option value="">全部月份</option>'+monthsAvailable().map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join("");
     fm.value=cur;
   }
 
   function filteredRecords(){
-    var cat=$("#fCat").value, mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
+    var mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
     var amtMinRaw=$("#fAmtMin").value.trim(), amtMaxRaw=$("#fAmtMax").value.trim();
     var amtMin=amtMinRaw===""?null:parseFloat(amtMinRaw);
     var amtMax=amtMaxRaw===""?null:parseFloat(amtMaxRaw);
     if(amtMin!=null && isNaN(amtMin)) amtMin=null;
     if(amtMax!=null && isNaN(amtMax)) amtMax=null;
     return state.records.filter(function(r){
-      if(cat && r.category!==cat) return false;
+      if(!catSel.has(r.category)) return false;
       if(mon && (r.date||"").slice(0,7)!==mon) return false;
       if(typ && r.type!==typ) return false;
       if(amtMin!=null || amtMax!=null){
@@ -849,8 +881,9 @@
 
   function renderList(){
     renderFilters();
-    var cat=$("#fCat").value, mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
-    var filterSig=[cat,mon,typ,kw,$("#fAmtMin").value.trim(),$("#fAmtMax").value.trim()].join("|");
+    var catSig=Array.from(catSel).sort().join(",");
+    var mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
+    var filterSig=[catSig,mon,typ,kw,$("#fAmtMin").value.trim(),$("#fAmtMax").value.trim()].join("|");
     var dataSig=filterSig+"|"+state.records.length;
     var rows;
     if(filterSig!==listState._sig){
@@ -957,7 +990,8 @@
     var rec={ id:uid(), date:todayStr(), amount:0, type:"expense", category:"other",
               merchant:"", source:"手动", note:"", raw:"", createdAt:Date.now(), updatedAt:Date.now() };
     state.records.push(rec); save();
-    $("#fCat").value=""; $("#fMonth").value=""; $("#fType").value=""; $("#fKw").value="";
+    catSel=new Set(catKeysPresent());
+    $("#fMonth").value=""; $("#fType").value=""; $("#fKw").value="";
     renderList(); editRecord(rec.id);
     var tr=$('#listBody tr[data-id="'+rec.id+'"]'); if(tr && tr.scrollIntoView) tr.scrollIntoView({block:"center"});
   }
@@ -1353,7 +1387,23 @@
       });
     });
 
-    ["fCat","fMonth","fType"].forEach(function(id){ $("#"+id).addEventListener("change",renderList); });
+    ["fMonth","fType"].forEach(function(id){ $("#"+id).addEventListener("change",renderList); });
+    $("#catBar").addEventListener("click",function(e){
+      var tb=e.target.closest("button[data-cb]");
+      if(tb){
+        var act=tb.getAttribute("data-cb"); var keys=catKeysPresent();
+        if(act==="all"){ catSel=new Set(keys); }
+        else if(act==="none"){ catSel=new Set(); }
+        else if(act==="invert"){ var nx=new Set(); keys.forEach(function(k){ if(!catSel.has(k)) nx.add(k); }); catSel=nx; }
+        renderList(); return;
+      }
+      var chip=e.target.closest(".cchip[data-k]");
+      if(chip){
+        var k=chip.getAttribute("data-k");
+        if(catSel.has(k)) catSel.delete(k); else catSel.add(k);
+        renderList();
+      }
+    });
     var _kwT=0;
     $("#fKw").addEventListener("input",function(){
       clearTimeout(_kwT);
