@@ -190,8 +190,10 @@
       <span class="muted" style="font-size:13px;">~</span>
       <input type="month" class="ctl" id="totalEnd">
       <button class="btn sm" id="totalRangeReset">全部</button>
+      <button class="btn sm" id="btnTotalAvg">计算月均</button>
     </div>
     <div class="kpis" id="kTotal"></div>
+    <div class="kpis" id="kTotalAvg" style="display:none;"></div>
     <div class="stat-grid">
       <div>
         <div class="row" style="justify-content:space-between; margin-bottom:6px;">
@@ -278,6 +280,10 @@
         <option value="income">仅收入</option>
         <option value="transfer">仅储蓄/投资</option>
       </select>
+      <span class="muted" style="font-size:13px;">金额</span>
+      <input class="ctl" id="fAmtMin" type="number" inputmode="decimal" min="0" step="0.01" placeholder="最小" style="width:82px;">
+      <span class="muted" style="font-size:13px;">~</span>
+      <input class="ctl" id="fAmtMax" type="number" inputmode="decimal" min="0" step="0.01" placeholder="最大" style="width:82px;">
       <input class="ctl grow" id="fKw" placeholder="搜索商户 / 说明…" style="min-width:140px;">
       <span class="muted" id="listMeta"></span>
       <span class="top-sp"></span>
@@ -815,10 +821,20 @@
 
   function filteredRecords(){
     var cat=$("#fCat").value, mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
+    var amtMinRaw=$("#fAmtMin").value.trim(), amtMaxRaw=$("#fAmtMax").value.trim();
+    var amtMin=amtMinRaw===""?null:parseFloat(amtMinRaw);
+    var amtMax=amtMaxRaw===""?null:parseFloat(amtMaxRaw);
+    if(amtMin!=null && isNaN(amtMin)) amtMin=null;
+    if(amtMax!=null && isNaN(amtMax)) amtMax=null;
     return state.records.filter(function(r){
       if(cat && r.category!==cat) return false;
       if(mon && (r.date||"").slice(0,7)!==mon) return false;
       if(typ && r.type!==typ) return false;
+      if(amtMin!=null || amtMax!=null){
+        var a=Math.abs(Number(r.amount)||0);
+        if(amtMin!=null && a<amtMin) return false;
+        if(amtMax!=null && a>amtMax) return false;
+      }
       if(kw){ var hay=((r.merchant||"")+" "+(r.note||"")+" "+(r.source||"")).toLowerCase(); if(hay.indexOf(kw)<0) return false; }
       return true;
     }).sort(function(a,b){ return (b.date||"").localeCompare(a.date||"") || (b.createdAt||0)-(a.createdAt||0); });
@@ -829,7 +845,7 @@
   function renderList(){
     renderFilters();
     var cat=$("#fCat").value, mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
-    var sig=[cat,mon,typ,kw,state.records.length].join("|");
+    var sig=[cat,mon,typ,kw,$("#fAmtMin").value.trim(),$("#fAmtMax").value.trim(),state.records.length].join("|");
     var rows;
     if(sig===listState._sig){
       rows=listState._rows;
@@ -951,7 +967,7 @@
     _catLegendDone=true;
   }
 
-  var totalState={pieFlow:"expense", startMonth:"", endMonth:""};
+  var totalState={pieFlow:"expense", startMonth:"", endMonth:"", showAvg:false};
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
 
@@ -1048,6 +1064,47 @@
   }
 
   // ---- 总计
+  function totalRecs(){
+    var sm=totalState.startMonth, em=totalState.endMonth;
+    return state.records.filter(function(r){
+      var m=(r.date||"").slice(0,7); if(!m) return false;
+      if(sm && m<sm) return false;
+      if(em && m>em) return false;
+      return true;
+    });
+  }
+  // 覆盖月份数：所选区间内最早→最晚月份之间的自然月跨度（含两端）
+  function monthsCovered(recs){
+    var s={}; recs.forEach(function(r){ var m=(r.date||"").slice(0,7); if(m) s[m]=true; });
+    var arr=Object.keys(s).sort();
+    if(!arr.length) return 0;
+    var a=arr[0], b=arr[arr.length-1];
+    return (+b.slice(0,4)-+a.slice(0,4))*12 + (+b.slice(5,7)-+a.slice(5,7)) + 1;
+  }
+  function renderTotalAvg(){
+    var box=$("#kTotalAvg"); if(!box) return;
+    if(!totalState.showAvg){ box.style.display="none"; box.innerHTML=""; return; }
+    var recs=totalRecs();
+    var months=monthsCovered(recs);
+    box.style.display="flex";
+    if(!months){
+      box.innerHTML='<div class="kpi" style="flex:1 1 100%;"><div class="n muted">—</div><div class="l">当前范围无数据，无法计算月均</div></div>';
+      return;
+    }
+    var exp=0, inc=0;
+    recs.forEach(function(r){
+      if(r.type==="income") inc+=r.amount;
+      else if(r.type==="transfer"){ /* 本金进出不计入收支月均 */ }
+      else exp+=r.amount;
+    });
+    var avgExp=exp/months, avgInc=inc/months, avgNet=(inc-exp)/months;
+    var netColor=avgNet>=0?"#12855a":"#c0392b";
+    box.innerHTML=''
+      +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtInt(avgExp)+'</div><div class="l">月均支出</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtInt(avgInc)+'</div><div class="l">月均收入</div></div>'
+      +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(avgNet>=0?"+":"−")+'¥'+fmtInt(Math.abs(avgNet))+'</div><div class="l">月均结余</div></div>'
+      +'<div class="kpi" style="flex:1 1 100%; background:transparent; padding:2px 0;"><div class="l" style="font-size:11px;">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入）</div></div>';
+  }
   function renderTotal(){
     var months=monthsInRange();
     var sEl=$("#totalStart"), eEl=$("#totalEnd");
@@ -1056,15 +1113,10 @@
       sEl.value=totalState.startMonth||"";
       eEl.value=totalState.endMonth||"";
     }
-    var sm=totalState.startMonth, em=totalState.endMonth;
-    var recs=state.records.filter(function(r){
-      var m=(r.date||"").slice(0,7); if(!m) return false;
-      if(sm && m<sm) return false;
-      if(em && m>em) return false;
-      return true;
-    });
+    var recs=totalRecs();
     $("#kTotal").innerHTML=kpiHTML(recs);
     ec("pieTotal").setOption(pieOption(recs,totalState.pieFlow), true);
+    renderTotalAvg();
 
     var yset={};
     recs.forEach(function(r){ var y=(r.date||"").slice(0,4); if(y) yset[y]=true; });
@@ -1257,6 +1309,11 @@
     $("#totalRangeReset").addEventListener("click",function(){
       totalState.startMonth=""; totalState.endMonth=""; renderTotal();
     });
+    $("#btnTotalAvg").addEventListener("click",function(){
+      totalState.showAvg=!totalState.showAvg;
+      $("#btnTotalAvg").textContent=totalState.showAvg?"收起月均":"计算月均";
+      renderTotalAvg();
+    });
     // 月度
     $("#monthPick").addEventListener("change",function(){
       var v=$("#monthPick").value; if(!v) return; monthState.month=v; renderMonth();
@@ -1289,6 +1346,13 @@
     $("#fKw").addEventListener("input",function(){
       clearTimeout(_kwT);
       _kwT=setTimeout(renderList,200);
+    });
+    var _amtT=0;
+    ["fAmtMin","fAmtMax"].forEach(function(id){
+      $("#"+id).addEventListener("input",function(){
+        clearTimeout(_amtT);
+        _amtT=setTimeout(renderList,200);
+      });
     });
     $("#btnAddManual").addEventListener("click",addManual);
 
