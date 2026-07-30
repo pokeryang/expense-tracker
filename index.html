@@ -359,6 +359,9 @@
     {key:"invest",   name:"投资理财", color:"#499894", kw:["基金","股票","定投","理财","证券","申购","买入","债券","券商","招银理财","支付宝理财","朝朝盈","零钱通","黄金定投","积存金","保险","年金","转入余额宝"]},
     {key:"shopping", name:"其他购物", color:"#8CD17D", kw:["淘宝","天猫","京东","拼多多","唯品会","抖音商城","得物","闲鱼","苏宁","亚马逊","网易严选","小米有品","购物","商城"]},
     {key:"group_pay",name:"群收款",   color:"#B87AB6", kw:["群收款","aa收款","AA收款","aa付款","AA付款","发出群红包","微信aa","微信AA"]},
+    {key:"renqing",        name:"人情往来", color:"#FF9DA7", kw:[]},
+    {key:"support_parents",name:"赡养爸妈", color:"#9D7660", kw:[]},
+    {key:"for_partner",    name:"给对象",   color:"#D95F9D", kw:[]},
     {key:"other",    name:"其他支出", color:"#B6992D", kw:[]}
   ];
   // 收入分类
@@ -918,7 +921,7 @@
     tr.innerHTML='<td><input type="date" value="'+esc(r.date)+'" class="e-date"></td>'
       +'<td class="right"><input class="amt e-amt" value="'+r.amount+'" style="width:80px;"></td>'
       +'<td><select class="e-cat">'+catOpts+'</select></td>'
-      +'<td><input class="e-mer" value="'+esc(r.merchant)+'"> <select class="e-type" style="width:84px;"><option value="expense"'+(r.type!=="income"&&r.type!=="transfer"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select></td>'
+      +'<td><input class="e-mer" value="'+esc(r.merchant)+'"> <select class="e-type" style="width:84px;"><option value="expense"'+(r.type!=="income"&&r.type!=="transfer"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select><input class="e-note" value="'+esc(r.note||"")+'" placeholder="备注（可选）" style="margin-top:5px;"></td>'
       +'<td><input class="e-src" value="'+esc(r.source||"")+'" style="width:64px;"></td>'
       +'<td class="right"><button class="icon-btn act-save" title="保存">✔</button><button class="icon-btn act-cancel" title="取消">✕</button></td>';
     $(".e-date",tr).focus();
@@ -931,6 +934,7 @@
     r.category=$(".e-cat",tr).value;
     r.merchant=$(".e-mer",tr).value.trim()||"未识别";
     r.type=$(".e-type",tr).value;
+    var noteEl=$(".e-note",tr); if(noteEl) r.note=noteEl.value.trim();
     r.source=$(".e-src",tr).value.trim();
     r.updatedAt=Date.now();
     save(); cloudUpsert(r); renderAll(); toast("已保存");
