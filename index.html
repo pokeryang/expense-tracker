@@ -1181,24 +1181,44 @@
   }
 
   function pieOption(recs, flow){
-    var byCat={};
-    recs.filter(function(r){ return (r.type||"expense")===flow; })
-        .forEach(function(r){ byCat[r.category]=(byCat[r.category]||0)+r.amount; });
+    var flowRecs = recs.filter(function(r){ return (r.type||"expense")===flow; });
+    var byCat={}, recsByCat={};
+    flowRecs.forEach(function(r){
+      byCat[r.category]=(byCat[r.category]||0)+r.amount;
+      (recsByCat[r.category]=recsByCat[r.category]||[]).push(r);
+    });
+    function top5Of(list){
+      return (list||[]).slice().sort(function(a,b){ return (b.amount||0)-(a.amount||0); }).slice(0,5);
+    }
     var pieCats = catsFor(flow);
     var data = pieCats.filter(function(c){ return byCat[c.key]>0; })
-      .map(function(c){ return {name:c.name, value:Math.round(byCat[c.key]*100)/100, itemStyle:{color:c.color}}; })
+      .map(function(c){ return {name:c.name, value:Math.round(byCat[c.key]*100)/100, itemStyle:{color:c.color}, top5:top5Of(recsByCat[c.key])}; })
       .sort(function(a,b){ return b.value-a.value; });
     // 其他 fallback: 若还有 key 不在当前 cats 里（历史数据），归到"其他"
     var known={}; pieCats.forEach(function(c){known[c.key]=true;});
-    var extra=0;
-    recs.filter(function(r){ return (r.type||"expense")===flow; })
-        .forEach(function(r){ if(!known[r.category]) extra += r.amount; });
-    if(extra>0){
-      data.push({name:"其他", value:Math.round(extra*100)/100, itemStyle:{color:"#B6992D"}});
+    var extraList=[];
+    flowRecs.forEach(function(r){ if(!known[r.category]) extraList.push(r); });
+    if(extraList.length){
+      var extra=extraList.reduce(function(s,r){ return s+(r.amount||0); },0);
+      data.push({name:"其他", value:Math.round(extra*100)/100, itemStyle:{color:"#B6992D"}, top5:top5Of(extraList)});
       data.sort(function(a,b){ return b.value-a.value; });
     }
     return {
-      tooltip:{trigger:"item", formatter:function(p){ return p.name+"<br/>¥"+fmtInt(p.value)+" ("+p.percent+"%)"; }},
+      tooltip:{trigger:"item", confine:true, extraCssText:"max-width:260px;",
+        formatter:function(p){
+          var head='<div style="font-weight:600;">'+esc(p.name)+'</div>'
+            +'<div style="margin-bottom:2px;">¥'+fmtInt(p.value)+' ('+p.percent+'%)</div>';
+          var t5=(p.data&&p.data.top5)||[];
+          if(!t5.length) return head;
+          var lines=t5.map(function(r,i){
+            var nm=esc((r.merchant&&r.merchant.trim())||p.name||"未识别");
+            var dt=esc((r.date||"").slice(5));
+            return '<div style="display:flex;justify-content:space-between;gap:14px;font-size:11px;line-height:1.7;">'
+              +'<span style="color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(i+1)+'. '+nm+' <span style="color:#999;">'+dt+'</span></span>'
+              +'<span style="font-weight:600;white-space:nowrap;">¥'+fmtInt(r.amount)+'</span></div>';
+          }).join("");
+          return head+'<div style="margin-top:4px;padding-top:3px;border-top:1px solid rgba(0,0,0,.1);color:#888;font-size:10.5px;">单笔 Top5</div>'+lines;
+        }},
       legend:{show:false},
       series:[{ type:"pie", radius:["40%","64%"], center:["50%","50%"], avoidLabelOverlap:true,
         minShowLabelAngle:6,
