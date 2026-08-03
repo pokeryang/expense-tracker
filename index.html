@@ -131,6 +131,32 @@
   .cchip:hover{filter:brightness(.97);}
   .foot{color:var(--sub); font-size:12.5px; text-align:center; margin:26px 0 6px;}
   input[type=file]{display:none;}
+  /* 单笔支出 Top5 排行榜 */
+  .rank{display:flex; flex-direction:column; gap:9px;}
+  .rk-row{display:flex; align-items:center; gap:10px;}
+  .rk-i{width:18px; height:18px; flex:0 0 18px; border-radius:50%; background:var(--line); color:var(--sub); font-size:11px; display:flex; align-items:center; justify-content:center; font-weight:700;}
+  .rk-row:nth-child(1) .rk-i{background:#c0392b; color:#fff;}
+  .rk-row:nth-child(2) .rk-i{background:#e67e22; color:#fff;}
+  .rk-row:nth-child(3) .rk-i{background:#e0a800; color:#fff;}
+  .rk-mid{flex:1; min-width:0;}
+  .rk-name{font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .rk-sub{font-size:11px; color:var(--sub); margin:1px 0 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .rk-bar{height:5px; background:var(--line); border-radius:5px; overflow:hidden;}
+  .rk-bar>i{display:block; height:100%; border-radius:5px;}
+  .rk-amt{font-size:13px; font-weight:700; color:#c0392b; white-space:nowrap; font-variant-numeric:tabular-nums;}
+  .legend-head{display:flex; justify-content:space-between; align-items:center; margin:16px 0 6px;}
+  /* 分类管理弹窗 */
+  .modal-mask{position:fixed; inset:0; background:rgba(20,25,35,.55); z-index:200; align-items:center; justify-content:center;}
+  .modal-box{background:#fff; padding:20px 22px; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.2);}
+  .cm-grp{margin-top:14px;}
+  .cm-grp-t{font-size:13px; font-weight:600; color:var(--brand-d); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+  .cm-row{display:flex; align-items:center; gap:8px; margin-bottom:7px;}
+  .cm-row input[type=color]{width:30px; height:30px; padding:0; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; flex:0 0 30px;}
+  .cm-row input.cm-name{width:120px; flex:0 0 120px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; font-size:13px;}
+  .cm-row input.cm-kw{flex:1; min-width:80px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; font-size:12px; color:#556;}
+  .cm-row .cm-del{border:1px solid #fbb; background:#fff5f5; color:#c53030; border-radius:8px; padding:5px 9px; font-size:12px; cursor:pointer; flex:0 0 auto;}
+  .cm-row .cm-del:disabled{opacity:.4; cursor:not-allowed;}
+  .cm-add{border:1px dashed var(--line); background:#fafbfc; color:var(--brand-d); border-radius:8px; padding:6px 12px; font-size:12.5px; cursor:pointer;}
 </style>
 </head>
 <body>
@@ -187,7 +213,11 @@
   </section>
 
   <!-- ============ 分类图例（3 张统计卡共用） ============ -->
-  <div id="catLegend" class="cat-legend-bar"></div>
+  <div class="legend-head">
+    <div class="muted" style="font-size:13px;">分类图例（3 张统计卡共用）</div>
+    <button class="btn sm" id="btnManageCats">管理分类</button>
+  </div>
+  <div id="catLegend" class="cat-legend-bar" style="margin-top:0;"></div>
 
   <!-- ============ 3 张统计卡横向均布 ============ -->
   <div class="stat-row">
@@ -219,6 +249,10 @@
         <div class="muted" style="font-size:13px; margin-bottom:6px;">各年收入 vs 支出</div>
         <div class="chart" id="barTotal"></div>
       </div>
+      <div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">单笔支出 Top5</div>
+        <div id="topTotal" class="rank"></div>
+      </div>
     </div>
   </section>
 
@@ -243,6 +277,10 @@
       <div>
         <div class="muted" style="font-size:13px; margin-bottom:6px;">当年各月收支</div>
         <div class="chart" id="barYear"></div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">单笔支出 Top5</div>
+        <div id="topYear" class="rank"></div>
       </div>
     </div>
   </section>
@@ -272,6 +310,10 @@
       <div>
         <div class="muted" style="font-size:13px; margin-bottom:6px;">当月每日收支</div>
         <div class="chart" id="barMonth"></div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">单笔支出 Top5</div>
+        <div id="topMonth" class="rank"></div>
       </div>
     </div>
   </section>
@@ -329,6 +371,21 @@
   </div>
 </div>
 
+<div id="catModal" class="modal-mask" style="display:none;">
+  <div class="modal-box" style="width:92vw;max-width:640px;max-height:86vh;overflow:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-weight:600;font-size:16px;">管理分类</div>
+      <button class="icon-btn" id="catMClose">✕</button>
+    </div>
+    <p class="muted" style="font-size:12px;line-height:1.6;margin:8px 0 4px;">可新增 / 改名 / 改色 / 改关键词（关键词用于截图自动归类，逗号分隔，可留空）。删除分类需输入云同步密钥确认；删除后该分类下已有记录会自动归入所属「其他」。保存后同步到云端，多设备一致。</p>
+    <div id="catMBody"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+      <button class="btn sm" id="catMCancel" style="background:#eef1f6;color:#4b5563;">取消</button>
+      <button class="btn sm" id="catMSave" style="background:#3f79ff;color:#fff;">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <!-- ===== libs: jsdelivr 优先，失败回退 unpkg ===== -->
@@ -352,8 +409,8 @@
   var SECRET_STORE_KEY = "expense-app-secret";
 
   // ---------------- categories ----------------
-  // 支出分类
-  var EXP_CATS = [
+  // 支出分类（内置默认；用户自定义后由 catConfig 覆盖）
+  var EXP_CATS_DEFAULT = [
     {key:"housing",  name:"住房",     color:"#4E79A7", kw:["房租","租金","房东","物业","水费","电费","燃气","天然气","装空调","空调","家具","宜家","链家","贝壳","自如","蛋壳","宽带","取暖","暖气","中介费","建材","家装"]},
     {key:"food",     name:"餐饮食品", color:"#F28E2B", kw:["美团","饿了么","外卖","餐厅","餐饮","饭店","肯德基","kfc","麦当劳","星巴克","瑞幸","库迪","喜茶","奈雪","蜜雪","咖啡","火锅","海底捞","烧烤","超市","盒马","山姆","永辉","沃尔玛","大润发","便利店","全家","罗森","美宜佳","水果","百果园","零食","饮料","蔬菜","生鲜","小吃","面馆","必胜客","汉堡","奶茶","茶饮","早餐","食堂","叮咚买菜"]},
     {key:"transit",  name:"同城交通", color:"#E15759", kw:["滴滴","出租车","打车","地铁","公交","高德打车","哈啰","哈罗","青桔","摩拜","美团单车","共享单车","花小猪","曹操","T3出行","加油","中石化","中石油","停车","etc","充电桩"]},
@@ -374,7 +431,7 @@
     {key:"other",    name:"其他支出", color:"#B6992D", kw:[]}
   ];
   // 收入分类
-  var INC_CATS = [
+  var INC_CATS_DEFAULT = [
     {key:"inc_salary",   name:"薪酬",       color:"#59A14F", kw:["工资","薪资","薪酬","奖金","年终奖","绩效","提成","劳务","补贴","发薪","代发工资","津贴"]},
     {key:"inc_refund",   name:"返现/退税",   color:"#F28E2B", kw:["返现","返利","退税","赔付","现金奖励","消费奖励"]},
     {key:"inc_refundback",name:"退款",       color:"#FF9DA7", kw:[]},
@@ -385,17 +442,60 @@
     {key:"inc_other",    name:"其他收入",   color:"#B6992D", kw:[]}
   ];
   // 储蓄/投资流向（本金进出，不计盈余）：sav_out=投出/存入本金，sav_in=赎回/取回本金
-  var TRA_CATS = [
+  var TRA_CATS_DEFAULT = [
     {key:"sav_out", name:"投资/储蓄", color:"#499894", kw:["买入","申购","定投","转入理财","投资理财","货币基金申购","银证转账","转出","定存","存入"]},
     {key:"sav_in",  name:"赎回/取回", color:"#8CD17D", kw:["赎回","本金赎回","取出","转回","银证转入","支取"]}
   ];
-  var ALL_CATS = EXP_CATS.concat(INC_CATS).concat(TRA_CATS);
-  var CAT_BY_KEY = {}; ALL_CATS.forEach(function(c){ CAT_BY_KEY[c.key]=c; });
-  function catsFor(type){ return type==="income"?INC_CATS:(type==="transfer"?TRA_CATS:EXP_CATS); }
-  // 由分类 key 反推流向
-  function flowOfCat(k){ if(k==="sav_out"||k==="sav_in") return "transfer"; if((CAT_BY_KEY[k]||{}).key && INC_CATS.some(function(c){return c.key===k;})) return "income"; return "expense"; }
-  function catName(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other).name; }
-  function catColor(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other).color; }
+  // 结构性分类：不可删除（删掉会破坏兜底/储蓄逻辑）
+  var PROTECTED_KEYS = { other:1, inc_other:1, sav_out:1, sav_in:1 };
+  var CAT_CFG_KEY = "expense-cat-config-v1";   // localStorage 离线兜底
+  var CAT_CFG_ID  = "__cat_config__";          // 云端 expenses 表里的配置行 id
+
+  function cloneCats(arr){ return (arr||[]).map(function(c){ return {key:c.key, name:c.name, color:c.color, kw:(c.kw||[]).slice()}; }); }
+  // 可变工作副本：默认=内置，加载 catConfig 后被覆盖
+  var EXP_CATS = cloneCats(EXP_CATS_DEFAULT);
+  var INC_CATS = cloneCats(INC_CATS_DEFAULT);
+  var TRA_CATS = cloneCats(TRA_CATS_DEFAULT);
+  var ALL_CATS = [], CAT_BY_KEY = {};
+  function rebuildCats(){
+    ALL_CATS = EXP_CATS.concat(INC_CATS).concat(TRA_CATS);
+    CAT_BY_KEY = {}; ALL_CATS.forEach(function(c){ CAT_BY_KEY[c.key]=c; });
+  }
+  rebuildCats();
+
+  function flowOfArr(flow){ return flow==="income"?INC_CATS:(flow==="transfer"?TRA_CATS:EXP_CATS); }
+  function flowDefaultKey(flow){ return flow==="income"?"inc_other":(flow==="transfer"?"sav_out":"other"); }
+  function catsFor(type){ return flowOfArr(type); }
+  // 由分类 key 反推流向（按当前工作副本判断，兼容自定义分类）
+  function flowOfCat(k){
+    if(TRA_CATS.some(function(c){return c.key===k;})) return "transfer";
+    if(INC_CATS.some(function(c){return c.key===k;})) return "income";
+    return "expense";
+  }
+  function catName(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other||{name:"其他"}).name; }
+  function catColor(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other||{color:"#B6992D"}).color; }
+
+  // 应用一份配置(可来自云端或本地)；缺某个流向则回退到内置默认
+  function applyCatConfig(cfg){
+    if(cfg && (cfg.expense||cfg.income||cfg.transfer)){
+      EXP_CATS = cloneCats(cfg.expense && cfg.expense.length ? cfg.expense : EXP_CATS_DEFAULT);
+      INC_CATS = cloneCats(cfg.income  && cfg.income.length  ? cfg.income  : INC_CATS_DEFAULT);
+      TRA_CATS = cloneCats(cfg.transfer&& cfg.transfer.length? cfg.transfer: TRA_CATS_DEFAULT);
+    }else{
+      EXP_CATS = cloneCats(EXP_CATS_DEFAULT);
+      INC_CATS = cloneCats(INC_CATS_DEFAULT);
+      TRA_CATS = cloneCats(TRA_CATS_DEFAULT);
+    }
+    rebuildCats();
+    _catLegendDone=false; // 让图例重绘
+  }
+  function currentCatConfig(){ return { v:1, expense:cloneCats(EXP_CATS), income:cloneCats(INC_CATS), transfer:cloneCats(TRA_CATS) }; }
+  function loadCatConfigLocal(){
+    try{ var raw=localStorage.getItem(CAT_CFG_KEY); if(raw){ applyCatConfig(JSON.parse(raw)); } }catch(e){ console.warn("catCfg local load failed",e); }
+  }
+  function saveCatConfigLocal(cfg){
+    try{ localStorage.setItem(CAT_CFG_KEY, JSON.stringify(cfg)); }catch(e){}
+  }
 
   // 判断一笔是否收入用的关键词（辅助 OCR 自动判定，符号更权威）
   var INCOME_KW = ["收入","退款","转入","收款","工资","薪资","奖金","红包收","返现","报销","利息","分红","收益","赎回","到账","入账","已收","向你转账","给你转账"];
@@ -444,6 +544,8 @@
     var migrated=0;
     state.records.forEach(function(r){ if(r.category==="social"){ r.category="transfer"; migrated++; } });
     if(migrated){ save(); }
+    // 自定义分类：本地兜底(云端就绪后会被云端配置覆盖)
+    loadCatConfigLocal();
   }
   function save(){
     try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
@@ -478,6 +580,15 @@
     if(!CLOUD_ON) return;
     SB.from(TABLE).delete().eq("id",id).then(function(res){
       if(res.error){ queueOp({op:"delete",id:id}); setCloudStatus("offline"); }
+      else setCloudStatus("synced");
+    });
+  }
+  // 自定义分类配置：以哨兵行 id=__cat_config__ 存进 expenses 表(复用现有 RLS，无需新建表)
+  function cloudUpsertCatConfig(cfg){
+    if(!CLOUD_ON || !SB) return;
+    SB.from(TABLE).upsert({ id:CAT_CFG_ID, ts:null, amount:0, category:"__config__",
+      data:{ __catConfig:true, config:cfg }, updated_at:new Date().toISOString() }).then(function(res){
+      if(res.error){ console.warn("catCfg cloud upsert err",res.error); setCloudStatus("offline"); }
       else setCloudStatus("synced");
     });
   }
@@ -536,7 +647,13 @@
             renderAll(); return;
           }
           var data=res.data||[];
-          data.forEach(function(row){ var r=recFromRow(row); cloudById[r.id]=r; });
+          data.forEach(function(row){
+            if(row.id===CAT_CFG_ID){
+              if(row.data && row.data.config){ applyCatConfig(row.data.config); saveCatConfigLocal(row.data.config); }
+              return;
+            }
+            var r=recFromRow(row); cloudById[r.id]=r;
+          });
           // 最近的数据先显示：首页(最新)一到就合并渲染
           if(!firstDone){ firstDone=true; mergeCloudIntoState(); renderAll(); }
           if(data.length<PAGE){
@@ -1014,6 +1131,30 @@
     _catLegendDone=true;
   }
 
+  // 单笔支出 Top5（当前统计时段内）：只看支出类，按金额降序取前 5
+  function renderTopInto(elId, recs){
+    var el=$("#"+elId); if(!el) return;
+    var exps=(recs||[]).filter(function(r){ return (r.type||"expense")==="expense"; })
+      .slice().sort(function(a,b){ return (b.amount||0)-(a.amount||0); }).slice(0,5);
+    if(!exps.length){ el.innerHTML='<div class="empty" style="padding:6px 0;">本时段暂无支出</div>'; return; }
+    var max=exps[0].amount||1;
+    el.innerHTML=exps.map(function(r,i){
+      var w=Math.max(4, Math.round((r.amount||0)/max*100));
+      var col=catColor(r.category);
+      var name=esc((r.merchant&&r.merchant.trim())||catName(r.category)||"未识别");
+      var sub=esc((r.date||"")+" · "+catName(r.category));
+      return '<div class="rk-row">'
+        +'<span class="rk-i">'+(i+1)+'</span>'
+        +'<div class="rk-mid">'
+          +'<div class="rk-name">'+name+'</div>'
+          +'<div class="rk-sub">'+sub+'</div>'
+          +'<div class="rk-bar"><i style="width:'+w+'%;background:'+col+'"></i></div>'
+        +'</div>'
+        +'<span class="rk-amt">¥'+fmtInt(r.amount)+'</span>'
+      +'</div>';
+    }).join("");
+  }
+
   var totalState={pieFlow:"expense", startMonth:"", endMonth:"", showAvg:false};
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
@@ -1162,6 +1303,7 @@
     }
     var recs=totalRecs();
     $("#kTotal").innerHTML=kpiHTML(recs);
+    renderTopInto("topTotal", recs);
     ec("pieTotal").setOption(pieOption(recs,totalState.pieFlow), true);
     renderTotalAvg();
 
@@ -1209,6 +1351,7 @@
     var m=monthState.month;
     var recs=state.records.filter(function(r){ return (r.date||"").slice(0,7)===m; });
     $("#kMonth").innerHTML=kpiHTML(recs);
+    renderTopInto("topMonth", recs);
     ec("pieMonth").setOption(pieOption(recs,monthState.pieFlow), true);
 
     var y=+m.slice(0,4), mo=+m.slice(5,7);
@@ -1246,6 +1389,7 @@
     var y=yearState.year;
     var recs=state.records.filter(function(r){ return (r.date||"").slice(0,4)===y; });
     $("#kYear").innerHTML=kpiHTML(recs);
+    renderTopInto("topYear", recs);
     ec("pieYear").setOption(pieOption(recs,yearState.pieFlow), true);
 
     var labels=[], expArr=[], incArr=[], savArr=[], expByM={}, incByM={}, savByM={};
@@ -1269,8 +1413,14 @@
       // still render KPI without echarts
       $("#kTotal").innerHTML=kpiHTML(state.records);
       var m=monthState.month||(state.records[0]&&(state.records[0].date||"").slice(0,7))||todayStr().slice(0,7);
-      $("#kMonth").innerHTML=kpiHTML(state.records.filter(function(r){return (r.date||"").slice(0,7)===m;}));
-      $("#kYear").innerHTML=kpiHTML(state.records.filter(function(r){return (r.date||"").slice(0,4)===(yearState.year||m.slice(0,4));}));
+      var yy=yearState.year||m.slice(0,4);
+      var monthRecs=state.records.filter(function(r){return (r.date||"").slice(0,7)===m;});
+      var yearRecs=state.records.filter(function(r){return (r.date||"").slice(0,4)===yy;});
+      $("#kMonth").innerHTML=kpiHTML(monthRecs);
+      $("#kYear").innerHTML=kpiHTML(yearRecs);
+      renderTopInto("topTotal", state.records);
+      renderTopInto("topMonth", monthRecs);
+      renderTopInto("topYear", yearRecs);
       return;
     }
     renderTotal();
@@ -1314,6 +1464,116 @@
       }catch(e){ toast("导入失败："+e.message,true); }
     };
     fr.readAsText(file);
+  }
+
+  // ---------------- 分类管理 ----------------
+  var catDraft=null; // 编辑草稿：{expense:[...], income:[...], transfer:[...]}
+  var CAT_PALETTE=["#4E79A7","#F28E2B","#59A14F","#B07AA1","#76B7B2","#EDC948","#FF9DA7","#9C755F","#86BCB6","#D37295","#8CD17D","#B6992D"];
+
+  function openCatModal(){
+    catDraft={ expense:cloneCats(EXP_CATS), income:cloneCats(INC_CATS), transfer:cloneCats(TRA_CATS) };
+    renderCatManager();
+    var m=$("#catModal"); if(m) m.style.display="flex";
+  }
+  function closeCatModal(){ var m=$("#catModal"); if(m) m.style.display="none"; catDraft=null; }
+
+  function catRowHTML(flow, c, idx){
+    var prot=!!PROTECTED_KEYS[c.key];
+    return '<div class="cm-row" data-flow="'+flow+'" data-idx="'+idx+'">'
+      +'<input type="color" class="cm-color" value="'+esc(c.color||"#888888")+'">'
+      +'<input type="text" class="cm-name" placeholder="名称" value="'+esc(c.name||"")+'">'
+      +'<input type="text" class="cm-kw" placeholder="关键词，逗号分隔（可留空）" value="'+esc((c.kw||[]).join("，"))+'">'
+      +'<button class="cm-del" data-flow="'+flow+'" data-idx="'+idx+'"'+(prot?' disabled title="结构性分类，不可删除"':'')+'>删除</button>'
+    +'</div>';
+  }
+  function renderCatManager(){
+    var body=$("#catMBody"); if(!body||!catDraft) return;
+    function grp(flow, title){
+      var arr=catDraft[flow]||[];
+      return '<div class="cm-grp" data-grp="'+flow+'">'
+        +'<div class="cm-grp-t">'+title+'</div>'
+        + arr.map(function(c,i){ return catRowHTML(flow,c,i); }).join("")
+        +'<button class="cm-add" data-flow="'+flow+'">+ 新增'+title+'分类</button>'
+      +'</div>';
+    }
+    body.innerHTML = grp("expense","支出") + grp("income","收入") + grp("transfer","储蓄/投资");
+  }
+  // 把弹窗里当前输入的值回写进草稿(增删前后都先同步，避免丢改动)
+  function syncCatDraftFromDOM(){
+    if(!catDraft) return;
+    ["expense","income","transfer"].forEach(function(flow){
+      var grpEl=document.querySelector('.cm-grp[data-grp="'+flow+'"]'); if(!grpEl) return;
+      $$(".cm-row", grpEl).forEach(function(row){
+        var idx=+row.getAttribute("data-idx");
+        var c=catDraft[flow][idx]; if(!c) return;
+        var colEl=$(".cm-color",row), nameEl=$(".cm-name",row), kwEl=$(".cm-kw",row);
+        if(colEl) c.color=colEl.value;
+        if(nameEl) c.name=nameEl.value.trim();
+        if(kwEl) c.kw=kwEl.value.split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean);
+      });
+    });
+  }
+  function catAdd(flow){
+    if(!catDraft) return;
+    syncCatDraftFromDOM();
+    var key="cust_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+    var color=CAT_PALETTE[catDraft[flow].length % CAT_PALETTE.length];
+    // 新增分类插在该流向「其他/兜底」之前，让兜底项始终在末尾
+    var arr=catDraft[flow];
+    var defKey=flowDefaultKey(flow);
+    var insAt=arr.length;
+    for(var i=0;i<arr.length;i++){ if(arr[i].key===defKey){ insAt=i; break; } }
+    arr.splice(insAt, 0, {key:key, name:"", color:color, kw:[]});
+    renderCatManager();
+  }
+  function catDelete(flow, idx){
+    if(!catDraft) return;
+    syncCatDraftFromDOM();
+    var c=catDraft[flow][idx]; if(!c) return;
+    if(PROTECTED_KEYS[c.key]){ toast("结构性分类不可删除",true); return; }
+    var secret=localStorage.getItem(SECRET_STORE_KEY)||"";
+    if(!secret){ toast("尚未设置云同步密钥，无法验证删除",true); return; }
+    var input=window.prompt("删除分类「"+(c.name||c.key)+"」需输入云同步密钥确认：");
+    if(input==null) return; // 取消
+    if(input.trim()!==secret){ toast("密钥不正确，已取消删除",true); return; }
+    catDraft[flow].splice(idx,1);
+    renderCatManager();
+    toast("已移除，点『保存』后生效");
+  }
+  function catSave(){
+    if(!catDraft) return;
+    syncCatDraftFromDOM();
+    // 校验：名称非空、key 不重复
+    var seen={}, err=null;
+    ["expense","income","transfer"].forEach(function(flow){
+      catDraft[flow].forEach(function(c){
+        if(!c.name){ err=err||"有分类未填名称"; }
+        if(seen[c.key]){ err=err||("分类标识重复："+c.key); }
+        seen[c.key]=true;
+      });
+    });
+    if(err){ toast(err,true); return; }
+    // 找出被删掉的旧 key → 在用记录改归该流向兜底分类
+    var newKeys={};
+    ["expense","income","transfer"].forEach(function(flow){ catDraft[flow].forEach(function(c){ newKeys[c.key]=true; }); });
+    var reassigned=[];
+    state.records.forEach(function(r){
+      if(!newKeys[r.category]){
+        r.category=flowDefaultKey(r.type||"expense");
+        r.updatedAt=Date.now();
+        reassigned.push(r);
+      }
+    });
+    var cfg={ v:1, expense:cloneCats(catDraft.expense), income:cloneCats(catDraft.income), transfer:cloneCats(catDraft.transfer) };
+    applyCatConfig(cfg);
+    saveCatConfigLocal(cfg);
+    save();
+    cloudUpsertCatConfig(cfg);
+    reassigned.forEach(function(r){ cloudUpsert(r); });
+    catSel=new Set(catKeysPresent()); // 过滤芯片可能引用了已删 key
+    closeCatModal();
+    renderAll();
+    toast("分类已保存"+(reassigned.length?("，"+reassigned.length+" 条记录已归入默认分类"):""));
   }
 
   // ---------------- events ----------------
@@ -1481,6 +1741,21 @@
     if(loginInput){
       loginInput.addEventListener("keydown",function(e){
         if(e.key==="Enter"){ e.preventDefault(); document.getElementById("btnLoginOk").click(); }
+      });
+    }
+
+    // 分类管理弹窗
+    var btnMc=$("#btnManageCats"); if(btnMc) btnMc.addEventListener("click", openCatModal);
+    var mcClose=$("#catMClose"); if(mcClose) mcClose.addEventListener("click", closeCatModal);
+    var mcCancel=$("#catMCancel"); if(mcCancel) mcCancel.addEventListener("click", closeCatModal);
+    var mcSave=$("#catMSave"); if(mcSave) mcSave.addEventListener("click", catSave);
+    var mcBody=$("#catMBody");
+    if(mcBody){
+      mcBody.addEventListener("click",function(e){
+        var addBtn=e.target.closest(".cm-add");
+        if(addBtn){ catAdd(addBtn.getAttribute("data-flow")); return; }
+        var delBtn=e.target.closest(".cm-del");
+        if(delBtn && !delBtn.disabled){ catDelete(delBtn.getAttribute("data-flow"), +delBtn.getAttribute("data-idx")); }
       });
     }
   }
