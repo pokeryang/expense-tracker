@@ -937,7 +937,7 @@
 
   // 多选类目筛选状态：catSel 为选中的类目 key 集合（在集合内的类目才显示）
   var catSel=new Set();
-  var catBarInit=false;
+  var catKnown=new Set(); // 已出现过的类目：新类目默认选中(默认全选)，已知的尊重用户手动取消
   function catKeysPresent(){
     var seen={};
     state.records.forEach(function(r){ if(r.category) seen[r.category]=true; });
@@ -947,14 +947,14 @@
   function renderCatBar(){
     var bar=$("#catBar"); if(!bar) return;
     var keys=catKeysPresent();
-    if(!catBarInit && keys.length){ keys.forEach(function(k){ catSel.add(k); }); catBarInit=true; }
+    // 新出现的类目默认选中(=默认全选)；已知过的不动，尊重用户手动取消
+    keys.forEach(function(k){ if(!catKnown.has(k)){ catKnown.add(k); catSel.add(k); } });
     // 清掉集合里已不存在的类目
     Array.from(catSel).forEach(function(k){ if(keys.indexOf(k)<0) catSel.delete(k); });
     var cnt={}; state.records.forEach(function(r){ cnt[r.category]=(cnt[r.category]||0)+1; });
     var html='<div class="cb-tools">'
       +'<span class="cb-lbl">类目</span>'
       +'<button class="btn sm ghost" data-cb="all">全选</button>'
-      +'<button class="btn sm ghost" data-cb="invert">反选</button>'
       +'<button class="btn sm ghost" data-cb="none">清空</button>'
       +'</div>';
     keys.forEach(function(k){
@@ -1655,7 +1655,6 @@
         var act=tb.getAttribute("data-cb"); var keys=catKeysPresent();
         if(act==="all"){ catSel=new Set(keys); }
         else if(act==="none"){ catSel=new Set(); }
-        else if(act==="invert"){ var nx=new Set(); keys.forEach(function(k){ if(!catSel.has(k)) nx.add(k); }); catSel=nx; }
         renderList(); return;
       }
       var chip=e.target.closest(".cchip[data-k]");
