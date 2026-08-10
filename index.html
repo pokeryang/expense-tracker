@@ -641,7 +641,7 @@
         state.records=Object.keys(merged).map(function(k){ return merged[k]; });
       }
       function nextPage(){
-        SB.from(TABLE).select("*").order("ts",{ascending:false}).range(offset, offset+PAGE-1).then(function(res){
+        SB.from(TABLE).select("*").order("ts",{ascending:false}).order("id",{ascending:false}).range(offset, offset+PAGE-1).then(function(res){
           if(res.error){
             console.warn("cloud fetch err",res.error);
             CLOUD_ON=false; aborted=true;
