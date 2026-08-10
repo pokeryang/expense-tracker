@@ -1178,8 +1178,8 @@
   // 卡片下方的口径备注：说明支出/收入已扣掉多少退款
   function refundNoteHTML(rf){
     var txt = rf.n
-      ? '口径：已扣除本时段退款 '+signedYuan(rf.amt)+'（'+rf.n+' 笔）—— 退款既不计收入也不计支出，收支盈余不变；饼图与柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。'
-      : '口径：支出与收入均已扣除退款，本时段无退款记录。';
+      ? '口径：支出已减去本时段退款总额 '+signedYuan(rf.amt)+'（'+rf.n+' 笔），收入也减去同一金额（退款不算收入），故收支盈余不变；饼图与柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。'
+      : '口径：支出与收入均已减去本时段退款总额，本时段无退款记录。';
     return '<div class="kpi kpi-note"><div class="l">'+txt+'</div></div>';
   }
 
@@ -1354,7 +1354,7 @@
       +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(avgExp)+'</div><div class="l">月均支出</div></div>'
       +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(avgInc)+'</div><div class="l">月均收入</div></div>'
       +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(avgNet>=0?"+":"−")+'¥'+fmtInt(Math.abs(avgNet))+'</div><div class="l">月均结余</div></div>'
-      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已扣除区间内退款 '+signedYuan(rfAvg.amt)+'）</div></div>';
+      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已减去区间内退款总额 '+signedYuan(rfAvg.amt)+'）</div></div>';
   }
   function renderTotal(){
     var months=monthsInRange();
