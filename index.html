@@ -1178,7 +1178,7 @@
   // 卡片下方的口径备注：说明支出/收入已扣掉多少退款
   function refundNoteHTML(rf){
     var txt = rf.n
-      ? '口径：支出已减去本时段退款总额 '+signedYuan(rf.amt)+'（'+rf.n+' 笔），收入也减去同一金额（退款不算收入），故收支盈余不变；饼图与柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。'
+      ? '口径：支出已减去本时段退款总额 '+signedYuan(rf.amt)+'（'+rf.n+' 笔），收入也减去同一金额（退款不算收入），故收支盈余不变；饼图优先按退款的原消费类目定向冲减、归属不到的部分再等比摊分，柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。'
       : '口径：支出与收入均已减去本时段退款总额，本时段无退款记录。';
     return '<div class="kpi kpi-note"><div class="l">'+txt+'</div></div>';
   }
@@ -1210,21 +1210,35 @@
 
   function pieOption(recs, flow){
     var flowRecs = recs.filter(function(r){ return (r.type||"expense")===flow; });
-    // 退款净额口径：收入侧剔除退款；支出侧按「净支出 ÷ 原支出」等比冲减（占比不变，总额与 KPI 一致）
+    // 退款净额口径：收入侧剔除退款；支出侧优先按退款的原类目（origCategory）定向冲减，
+    // 归属不到类目的剩余退款再对其余类目等比摊分，保证饼图总额与 KPI「全部支出」一致。
     var rf = refundStat(recs), scale = 1;
     if(flow==="income"){
       flowRecs = flowRecs.filter(function(r){ return !isRefund(r); });
-    }else if(flow==="expense" && rf.amt>0){
-      var expRaw = flowRecs.reduce(function(s,r){ return s+(r.amount||0); },0);
-      // 退款 ≥ 支出的极端时段：冲减后无正数可分，退回原始金额以保留类目构成
-      if(expRaw>0 && expRaw-rf.amt>0) scale = (expRaw-rf.amt)/expRaw;
     }
-    function net(v){ return Math.round(v*scale*100)/100; }
     var byCat={}, recsByCat={};
     flowRecs.forEach(function(r){
       byCat[r.category]=(byCat[r.category]||0)+r.amount;
       (recsByCat[r.category]=recsByCat[r.category]||[]).push(r);
     });
+    if(flow==="expense" && rf.amt>0){
+      var attr={}, unattr=0;
+      recs.forEach(function(r){
+        if(!isRefund(r)) return;
+        var oc=r.origCategory;
+        if(oc && byCat[oc]>0) attr[oc]=(attr[oc]||0)+(r.amount||0);
+        else unattr+=(r.amount||0);
+      });
+      Object.keys(attr).forEach(function(k){
+        var cut=Math.min(attr[k], byCat[k]);
+        byCat[k]-=cut;
+        unattr+=attr[k]-cut;             // 该类目冲不完的部分退回等比摊分池
+      });
+      var rest=0; Object.keys(byCat).forEach(function(k){ rest+=byCat[k]; });
+      // 退款 ≥ 剩余支出的极端时段：无正数可分，保留类目构成不再摊分
+      if(unattr>0 && rest>0 && rest-unattr>0) scale=(rest-unattr)/rest;
+    }
+    function net(v){ return Math.round(v*scale*100)/100; }
     function top5Of(list){
       return (list||[]).slice().sort(function(a,b){ return (b.amount||0)-(a.amount||0); }).slice(0,5);
     }
@@ -1235,10 +1249,10 @@
       .sort(function(a,b){ return b.value-a.value; });
     // 其他 fallback: 若还有 key 不在当前 cats 里（历史数据），归到"其他"
     var known={}; pieCats.forEach(function(c){known[c.key]=true;});
-    var extraList=[];
+    var extraList=[], extra=0;
     flowRecs.forEach(function(r){ if(!known[r.category]) extraList.push(r); });
+    Object.keys(byCat).forEach(function(k){ if(!known[k]) extra+=byCat[k]; });
     if(extraList.length){
-      var extra=extraList.reduce(function(s,r){ return s+(r.amount||0); },0);
       if(net(extra)>0){
         data.push({name:"其他", value:net(extra), itemStyle:{color:"#B6992D"}, top5:top5Of(extraList)});
         data.sort(function(a,b){ return b.value-a.value; });
