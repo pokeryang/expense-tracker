@@ -93,6 +93,8 @@
   .kpi{background:var(--chip); border-radius:10px; padding:7px 10px; min-width:0; flex:1 1 calc(50% - 8px);}
   .kpi .n{font-size:16px; font-weight:700; font-variant-numeric:tabular-nums;}
   .kpi .l{font-size:12px; color:var(--sub);}
+  .kpi.kpi-note{flex:1 1 100%; background:transparent; padding:2px 0;}
+  .kpi.kpi-note .l{font-size:11px; line-height:1.6;}
   .cat-legend{display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;}
   .cat-legend .c{font-size:12px; padding:2px 9px; border-radius:999px; background:var(--chip); cursor:pointer; border:1px solid transparent;}
   .cat-legend .c.on{border-color:var(--brand); background:#eaf1f9;}
@@ -1023,7 +1025,9 @@
       else if(r.type==="transfer"){ if(r.category!=="sav_in") sav+=r.amount; else sav-=r.amount; }
       else exp+=r.amount;
     }
-    $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtInt(exp)+(inc?(" · 收入 ¥"+fmtInt(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtInt(sav)):"");
+    var rfList=refundStat(rows);
+    $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtInt(exp)+(inc?(" · 收入 ¥"+fmtInt(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtInt(sav)):"")
+      +(rfList.n?(" · 含退款 ¥"+fmtInt(rfList.amt)+"（明细为原始金额，不冲减）"):"");
 
     if(!rows.length){
       body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
@@ -1159,6 +1163,26 @@
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
 
+  // ---------------- 退款净额口径（3 张统计卡共用） ----------------
+  // 退款既不算收入，也不算真实支出：支出、收入两侧都扣掉本时段的退款，
+  // 因此「收支盈余」与冲减前完全一致，只是两侧的绝对额都变成净额。
+  var REFUND_CAT = "inc_refundback";
+  function isRefund(r){ return (r&&r.type==="income") && r.category===REFUND_CAT; }
+  // 本时段退款汇总：总额 / 笔数（分桶留给各卡按年、月、日自行冲减）
+  function refundStat(recs){
+    var amt=0, n=0;
+    (recs||[]).forEach(function(r){ if(isRefund(r)){ amt+=(r.amount||0); n++; } });
+    return {amt:amt, n:n};
+  }
+  function signedYuan(v){ return (v<0?"−¥":"¥")+fmtInt(Math.abs(v)); }
+  // 卡片下方的口径备注：说明支出/收入已扣掉多少退款
+  function refundNoteHTML(rf){
+    var txt = rf.n
+      ? '口径：已扣除本时段退款 '+signedYuan(rf.amt)+'（'+rf.n+' 笔）—— 退款既不计收入也不计支出，收支盈余不变；饼图与柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。'
+      : '口径：支出与收入均已扣除退款，本时段无退款记录。';
+    return '<div class="kpi kpi-note"><div class="l">'+txt+'</div></div>';
+  }
+
   function kpiHTML(recs){
     var exp=0, expN=0, inc=0, savOut=0, savIn=0;
     recs.forEach(function(r){
@@ -1166,22 +1190,36 @@
       else if(r.type==="transfer"){ if(r.category==="sav_in") savIn+=r.amount; else savOut+=r.amount; }
       else { exp+=r.amount; expN++; }
     });
-    var net = inc - exp;                 // 盈余：真实收入 − 真实支出，不含本金进出
+    var rf = refundStat(recs);
+    exp -= rf.amt;                       // 退款冲减支出
+    inc -= rf.amt;                       // 退款也不算收入
+    var net = inc - exp;                 // 盈余：真实收入 − 真实支出，不含本金进出（冲减后数值不变）
     var netColor = net>=0 ? "#12855a" : "#c0392b";
     var savNet = savOut - savIn;         // 储蓄/投资净额：净投入为正
     var savColor = savNet>=0 ? "#2a6f7a" : "#b06d00";
     var html = ''
-      +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtInt(exp)+'</div><div class="l">全部支出</div></div>'
-      +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtInt(inc)+'</div><div class="l">全部收入</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(exp)+'</div><div class="l">全部支出（已扣退款）</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(inc)+'</div><div class="l">全部收入（已扣退款）</div></div>'
       +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtInt(Math.abs(net))+'</div><div class="l">收支盈余</div></div>';
     if(savOut||savIn){
       html+='<div class="kpi"><div class="n" style="color:'+savColor+'">'+(savNet>=0?"":"−")+'¥'+fmtInt(Math.abs(savNet))+'</div><div class="l">储蓄/投资净额</div></div>';
     }
+    html += refundNoteHTML(rf);
     return html;
   }
 
   function pieOption(recs, flow){
     var flowRecs = recs.filter(function(r){ return (r.type||"expense")===flow; });
+    // 退款净额口径：收入侧剔除退款；支出侧按「净支出 ÷ 原支出」等比冲减（占比不变，总额与 KPI 一致）
+    var rf = refundStat(recs), scale = 1;
+    if(flow==="income"){
+      flowRecs = flowRecs.filter(function(r){ return !isRefund(r); });
+    }else if(flow==="expense" && rf.amt>0){
+      var expRaw = flowRecs.reduce(function(s,r){ return s+(r.amount||0); },0);
+      // 退款 ≥ 支出的极端时段：冲减后无正数可分，退回原始金额以保留类目构成
+      if(expRaw>0 && expRaw-rf.amt>0) scale = (expRaw-rf.amt)/expRaw;
+    }
+    function net(v){ return Math.round(v*scale*100)/100; }
     var byCat={}, recsByCat={};
     flowRecs.forEach(function(r){
       byCat[r.category]=(byCat[r.category]||0)+r.amount;
@@ -1192,7 +1230,8 @@
     }
     var pieCats = catsFor(flow);
     var data = pieCats.filter(function(c){ return byCat[c.key]>0; })
-      .map(function(c){ return {name:c.name, value:Math.round(byCat[c.key]*100)/100, itemStyle:{color:c.color}, top5:top5Of(recsByCat[c.key])}; })
+      .map(function(c){ return {name:c.name, value:net(byCat[c.key]), itemStyle:{color:c.color}, top5:top5Of(recsByCat[c.key])}; })
+      .filter(function(d){ return d.value>0; })
       .sort(function(a,b){ return b.value-a.value; });
     // 其他 fallback: 若还有 key 不在当前 cats 里（历史数据），归到"其他"
     var known={}; pieCats.forEach(function(c){known[c.key]=true;});
@@ -1200,8 +1239,10 @@
     flowRecs.forEach(function(r){ if(!known[r.category]) extraList.push(r); });
     if(extraList.length){
       var extra=extraList.reduce(function(s,r){ return s+(r.amount||0); },0);
-      data.push({name:"其他", value:Math.round(extra*100)/100, itemStyle:{color:"#B6992D"}, top5:top5Of(extraList)});
-      data.sort(function(a,b){ return b.value-a.value; });
+      if(net(extra)>0){
+        data.push({name:"其他", value:net(extra), itemStyle:{color:"#B6992D"}, top5:top5Of(extraList)});
+        data.sort(function(a,b){ return b.value-a.value; });
+      }
     }
     return {
       tooltip:{trigger:"item", confine:true, extraCssText:"max-width:260px;",
@@ -1305,13 +1346,15 @@
       else if(r.type==="transfer"){ /* 本金进出不计入收支月均 */ }
       else exp+=r.amount;
     });
+    var rfAvg=refundStat(recs);
+    exp-=rfAvg.amt; inc-=rfAvg.amt;      // 退款两侧对冲，月均结余不变
     var avgExp=exp/months, avgInc=inc/months, avgNet=(inc-exp)/months;
     var netColor=avgNet>=0?"#12855a":"#c0392b";
     box.innerHTML=''
-      +'<div class="kpi"><div class="n" style="color:#c0392b">¥'+fmtInt(avgExp)+'</div><div class="l">月均支出</div></div>'
-      +'<div class="kpi"><div class="n" style="color:#12855a">¥'+fmtInt(avgInc)+'</div><div class="l">月均收入</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(avgExp)+'</div><div class="l">月均支出</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(avgInc)+'</div><div class="l">月均收入</div></div>'
       +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(avgNet>=0?"+":"−")+'¥'+fmtInt(Math.abs(avgNet))+'</div><div class="l">月均结余</div></div>'
-      +'<div class="kpi" style="flex:1 1 100%; background:transparent; padding:2px 0;"><div class="l" style="font-size:11px;">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入）</div></div>';
+      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已扣除区间内退款 '+signedYuan(rfAvg.amt)+'）</div></div>';
   }
   function renderTotal(){
     var months=monthsInRange();
@@ -1336,7 +1379,10 @@
     recs.forEach(function(r){
       var y=(r.date||"").slice(0,4);
       if(!(y in expByY)) return;
-      if(r.type==="income") incByY[y]+=r.amount;
+      if(r.type==="income"){
+        if(isRefund(r)) expByY[y]-=r.amount;   // 退款不计收入，改为冲减当年支出
+        else incByY[y]+=r.amount;
+      }
       else if(r.type==="transfer"){ if(r.category!=="sav_in") savByY[y]+=r.amount; }
       else expByY[y]+=r.amount;
     });
@@ -1381,7 +1427,10 @@
     recs.forEach(function(r){
       var dd=(r.date||"").slice(8,10);
       if(!(dd in expByD)) return;
-      if(r.type==="income") incByD[dd]+=r.amount;
+      if(r.type==="income"){
+        if(isRefund(r)) expByD[dd]-=r.amount;   // 退款不计收入，改为冲减当日支出
+        else incByD[dd]+=r.amount;
+      }
       else if(r.type==="transfer"){ if(r.category!=="sav_in") savByD[dd]+=r.amount; }
       else expByD[dd]+=r.amount;
     });
@@ -1417,7 +1466,10 @@
     recs.forEach(function(r){
       var mo=(r.date||"").slice(5,7);
       if(!(mo in expByM)) return;
-      if(r.type==="income") incByM[mo]+=r.amount;
+      if(r.type==="income"){
+        if(isRefund(r)) expByM[mo]-=r.amount;   // 退款不计收入，改为冲减当月支出
+        else incByM[mo]+=r.amount;
+      }
       else if(r.type==="transfer"){ if(r.category!=="sav_in") savByM[mo]+=r.amount; }
       else expByM[mo]+=r.amount;
     });
