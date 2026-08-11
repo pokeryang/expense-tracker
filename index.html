@@ -90,6 +90,9 @@
   @media(max-width:1100px){ .stat-row{grid-template-columns:1fr;} }
   @media(max-width:760px){ .thumb{width:74px;height:94px;} }
   .chart{width:100%; height:260px;}
+  .chart.tall{height:400px;}
+  @media(max-width:760px){ .chart.tall{height:320px;} }
+  .catbar.trend-bar{margin:0 0 10px;}
   .kpis{display:flex; gap:8px; flex-wrap:wrap; margin:2px 0 12px;}
   .kpi{background:var(--chip); border-radius:10px; padding:7px 10px; min-width:0; flex:1 1 calc(50% - 8px);}
   .kpi .n{font-size:16px; font-weight:700; font-variant-numeric:tabular-nums;}
@@ -322,6 +325,27 @@
     </div>
   </section>
   </div><!-- /.stat-row -->
+
+  <!-- ============ 分类年度趋势 ============ -->
+  <section class="card">
+    <h2>分类年度趋势</h2>
+    <div class="row" style="margin-bottom:10px; gap:8px; align-items:center; flex-wrap:wrap;">
+      <div class="seg trend-flow">
+        <button data-flow="expense" class="on">支出</button>
+        <button data-flow="income">收入</button>
+        <button data-flow="transfer">储蓄/投资</button>
+      </div>
+      <div class="seg trend-mode">
+        <button data-mode="group" class="on">分组</button>
+        <button data-mode="stack">堆叠</button>
+        <button data-mode="yoy">同比%</button>
+      </div>
+      <span class="muted" id="trendMeta" style="font-size:12.5px;"></span>
+    </div>
+    <div class="catbar trend-bar" id="trendCatBar"></div>
+    <div class="chart tall" id="barCatTrend"></div>
+    <div class="kpis" id="kTrend"></div>
+  </section>
 
   <!-- ============ 明细 ============ -->
   <section class="card">
@@ -1216,10 +1240,12 @@
     return html;
   }
 
-  function pieOption(recs, flow){
-    var flowRecs = recs.filter(function(r){ return (r.type||"expense")===flow; });
-    // 退款净额口径：收入侧剔除退款；支出侧优先按退款的原类目（origCategory）定向冲减，
-    // 归属不到类目的剩余退款再对其余类目等比摊分，保证饼图总额与 KPI「全部支出」一致。
+  // 分类聚合（退款净额口径）：饼图与「分类年度趋势」柱图共用同一实现，保证两处口径不漂移。
+  // 收入侧剔除退款行；支出侧优先按退款的原类目（origCategory）定向冲减，归属不到类目的
+  // 剩余退款再对其余类目等比摊分，保证分类合计与 KPI「全部支出（已扣退款）」一致。
+  // byCat 为定向冲减后的类目额，仍需经 net() 施加等比摊分系数才是最终净额。
+  function catAggregate(recs, flow){
+    var flowRecs = (recs||[]).filter(function(r){ return (r.type||"expense")===flow; });
     var rf = refundStat(recs), scale = 1;
     if(flow==="income"){
       flowRecs = flowRecs.filter(function(r){ return !isRefund(r); });
@@ -1231,7 +1257,7 @@
     });
     if(flow==="expense" && rf.amt>0){
       var attr={}, unattr=0;
-      recs.forEach(function(r){
+      (recs||[]).forEach(function(r){
         if(!isRefund(r)) return;
         var oc=r.origCategory;
         if(oc && byCat[oc]>0) attr[oc]=(attr[oc]||0)+(r.amount||0);
@@ -1246,7 +1272,17 @@
       // 退款 ≥ 剩余支出的极端时段：无正数可分，保留类目构成不再摊分
       if(unattr>0 && rest>0 && rest-unattr>0) scale=(rest-unattr)/rest;
     }
-    function net(v){ return Math.round(v*scale*100)/100; }
+    return {
+      byCat: byCat, recsByCat: recsByCat, rf: rf, scale: scale,
+      net: function(v){ return Math.round((v||0)*scale*100)/100; }
+    };
+  }
+
+  function pieOption(recs, flow){
+    var agg=catAggregate(recs, flow);
+    var byCat=agg.byCat, recsByCat=agg.recsByCat, net=agg.net;
+    var flowRecs=[];
+    Object.keys(recsByCat).forEach(function(k){ flowRecs=flowRecs.concat(recsByCat[k]); });
     function top5Of(list){
       return (list||[]).slice().sort(function(a,b){ return (b.amount||0)-(a.amount||0); }).slice(0,5);
     }
@@ -1499,9 +1535,387 @@
     ec("barYear").setOption(twoBarOption(labels, expArr, incArr, savArr), true);
   }
 
+  // ---- 分类年度趋势
+  // 每个流向单独记住选中的类目：sel=已选集合，known=已出现过的类目（新类目默认选中）
+  var trendState={ flow:"expense", mode:"group", sel:{}, known:{}, _keys:[] };
+
+  function shortMoney(v){
+    var a=Math.abs(Number(v)||0);
+    if(a>=100000000) return (v/100000000).toFixed(2)+"亿";
+    if(a>=10000) return (v/10000).toFixed(a%10000?1:0)+"w";
+    return String(Math.round(v));
+  }
+  // 涨跌配色：支出涨=红（不利），收入涨=绿（有利），储蓄/投资用青/橙
+  function trendUpColor(flow){ return flow==="income"?"#12855a":(flow==="transfer"?"#2a6f7a":"#c0392b"); }
+  function trendDownColor(flow){ return flow==="income"?"#c0392b":(flow==="transfer"?"#b06d00":"#12855a"); }
+
+  // 按年分桶聚合：每年独立走一遍 catAggregate，保证「各年选中类目合计」与该年 KPI 口径一致
+  function trendData(flow){
+    var recsByYear={}, yset={}, maxMonth={};
+    state.records.forEach(function(r){
+      var y=(r.date||"").slice(0,4); if(!/^\d{4}$/.test(y)) return;
+      yset[y]=true; (recsByYear[y]=recsByYear[y]||[]).push(r);
+      var m=parseInt((r.date||"").slice(5,7),10)||0;
+      if(m>(maxMonth[y]||0)) maxMonth[y]=m;
+    });
+    var years=Object.keys(yset).sort();
+    var known={}; catsFor(flow).forEach(function(c){ known[c.key]=true; });
+    var fallback=flowDefaultKey(flow);
+    var vals={}, totalByYear={};
+    years.forEach(function(y){
+      var agg=catAggregate(recsByYear[y], flow);
+      var t=0;
+      Object.keys(agg.byCat).forEach(function(k){
+        var v=agg.net(agg.byCat[k]);
+        if(!(v>0)) return;
+        var key=known[k]?k:fallback;          // 历史遗留类目归入兜底类目，与饼图一致
+        vals[key]=vals[key]||{};
+        vals[key][y]=Math.round(((vals[key][y]||0)+v)*100)/100;
+        t+=v;
+      });
+      totalByYear[y]=Math.round(t*100)/100;
+    });
+    // 最后一年若没走完整年，标出来：整年同比会失真，需配同期对比
+    var partial=null;
+    if(years.length){
+      var ly=years[years.length-1], lm=maxMonth[ly]||0;
+      if(lm>0 && lm<12) partial={year:ly, months:lm};
+    }
+    return {years:years, vals:vals, totalByYear:totalByYear, partial:partial};
+  }
+
+  function trendSel(flow, keys){
+    if(!trendState.sel[flow]){
+      // 首屏默认只看金额 Top6：类目多达十几个时全选会把柱子挤成细线，用户可一键「全选」
+      trendState.sel[flow]=new Set(keys.slice(0,6));
+      trendState.known[flow]=new Set(keys);
+      return trendState.sel[flow];
+    }
+    var sel=trendState.sel[flow], kn=trendState.known[flow];
+    keys.forEach(function(k){ if(!kn.has(k)){ kn.add(k); sel.add(k); } });   // 新类目默认选中
+    Array.from(sel).forEach(function(k){ if(keys.indexOf(k)<0) sel.delete(k); });
+    return sel;
+  }
+
+  function renderTrendCatBar(keys, sumOf, sel){
+    var bar=$("#trendCatBar"); if(!bar) return;
+    var html='<div class="cb-tools">'
+      +'<span class="cb-lbl">类目</span>'
+      +'<button class="btn sm ghost" data-tcb="all">全选</button>'
+      +'<button class="btn sm ghost" data-tcb="top6">Top6</button>'
+      +'<button class="btn sm ghost" data-tcb="none">清空</button>'
+      +'</div>';
+    if(!keys.length){
+      html+='<span class="muted" style="font-size:12.5px;">该流向暂无数据</span>';
+    }
+    keys.forEach(function(k){
+      var on=sel.has(k), col=catColor(k);
+      var st=on?('background:'+col+';border-color:'+col+';'):'';
+      html+='<span class="cchip'+(on?' on':'')+'" data-tk="'+k+'" style="'+st+'">'
+        +'<span class="dot" style="background:'+col+'"></span>'
+        +esc(catName(k))+' <span style="opacity:.7;font-weight:400;">¥'+shortMoney(sumOf[k]||0)+'</span></span>';
+    });
+    bar.innerHTML=html;
+  }
+
+  function emptyChartOption(text){
+    return {
+      title:{text:text||"暂无数据", left:"center", top:"middle", textStyle:{fontSize:13, color:"#9aa1ad", fontWeight:400}},
+      xAxis:{show:false}, yAxis:{show:false}, series:[]
+    };
+  }
+
+  function catTrendOption(d, cats, mode, flow){
+    var years=d.years, vals=d.vals;
+    trendState._cap=null;                       // 本次渲染是否触发同比封顶，供 meta 文案取用
+    var nameVals={}; cats.forEach(function(c){ nameVals[c.name]=vals[c.key]||{}; });
+    var selTotal={};
+    years.forEach(function(y){
+      var s=0; cats.forEach(function(c){ s+=(vals[c.key]&&vals[c.key][y])||0; });
+      selTotal[y]=Math.round(s*100)/100;
+    });
+    var up=trendUpColor(flow), down=trendDownColor(flow);
+    var legendData=cats.map(function(c){ return c.name; });
+    var baseLegend={data:legendData, type:"scroll", top:0, textStyle:{fontSize:11}, itemWidth:12, itemHeight:8, pageIconSize:9};
+    // 未走完的那一年标出实际月份区间，避免被当成整年读
+    var xLabel={fontSize:11, interval:0, lineHeight:13,
+      formatter:function(v){ return (d.partial && d.partial.year===v) ? (v+"\n1–"+d.partial.months+"月") : v; }};
+
+    // ---- 同比% 模式：X 轴从第二年起，柱高=该类目当年相对上年的增幅
+    if(mode==="yoy"){
+      var yy=years.slice(1);
+      if(!yy.length) return emptyChartOption("只有一年数据，无法计算同比");
+      var anyYoy=false, absList=[], minG=0;
+      var growth=cats.map(function(c){
+        var m=vals[c.key]||{};
+        return yy.map(function(y){
+          var prev=m[String(+y-1)]||0, cur=m[y]||0;
+          if(prev<=0) return null;                 // 上年为 0（新增类目）无法算同比
+          anyYoy=true;
+          var g=Math.round((cur-prev)/prev*1000)/10;
+          absList.push(Math.abs(g));
+          if(g<minG) minG=g;
+          return g;
+        });
+      });
+      if(!anyYoy) return emptyChartOption("所选类目缺少可比的上年数据");
+      // 小基数类目会冒出 +2000% 这种离群值，把其余柱全压平：按 P85 自动封顶，超出的柱标真实值
+      absList.sort(function(a,b){ return a-b; });
+      var p85=absList[Math.floor(absList.length*0.85)]||0, maxAbs=absList[absList.length-1]||0;
+      var cap=Math.ceil(Math.min(Math.max(p85,100),500)/50)*50;
+      var clipped=maxAbs>cap;
+      if(!clipped) cap=null;
+      trendState._cap=cap;
+      // 下跌最多只能 −100%，负轴按真实最小值给，别跟着正轴的封顶值对称（否则半张图是空白）
+      var yMin=cap ? (minG<0 ? -Math.ceil(Math.min(Math.abs(minG), cap)*1.15/10)*10 : 0) : null;
+      var series=cats.map(function(c, ci){
+        return {
+          name:c.name, type:"bar", barMaxWidth:22, emphasis:{focus:"series"},
+          itemStyle:{color:c.color, borderRadius:[3,3,0,0]},
+          labelLayout:{hideOverlap:true},          // 相邻柱都封顶时标签会叠成一团，重叠的直接藏掉（精确值看 tooltip）
+          label:{show:!!cap, position:"top", fontSize:9, color:"#7a8194",
+            formatter:function(p){
+              var r=p.data&&p.data.real;
+              if(r==null || Math.abs(r)<=cap) return "";     // 只给封顶的柱标真实值
+              return (r>=0?"+":"−")+Math.abs(r).toFixed(0)+"%";
+            }},
+          data: growth[ci].map(function(g){
+            if(g==null) return null;
+            if(!cap) return {value:g, real:g};
+            return {value:Math.max(-cap, Math.min(cap, g)), real:g};
+          })
+        };
+      });
+      return {
+        tooltip:{trigger:"axis", axisPointer:{type:"shadow"}, confine:true, extraCssText:"max-width:320px;",
+          formatter:function(ps){
+            var y=ps[0].axisValue, py=String(+y-1);
+            var arr=ps.map(function(p){
+              var m=nameVals[p.seriesName]||{};
+              var prev=m[py]||0, cur=m[y]||0;
+              return {p:p, prev:prev, cur:cur, g:prev>0?((cur-prev)/prev*100):null};   // 按金额重算，不受封顶影响
+            }).filter(function(x){ return x.g!=null && !isNaN(x.g); })
+              .sort(function(a,b){ return b.g-a.g; });
+            var head='<div style="font-weight:600;margin-bottom:2px;">'+y+' 年 vs '+py+' 年</div>';
+            if(!arr.length) return head+'<div style="color:#888;font-size:11px;">无可比数据</div>';
+            return head+arr.slice(0,12).map(function(x){
+              var g=x.g;
+              return '<div style="display:flex;justify-content:space-between;gap:12px;font-size:11px;line-height:1.7;">'
+                +'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+x.p.marker+esc(x.p.seriesName)+'</span>'
+                +'<span style="white-space:nowrap;color:'+(g>=0?up:down)+';font-weight:600;">'+(g>=0?"+":"−")+Math.abs(g).toFixed(1)+'%'
+                +'<span style="color:#999;font-weight:400;"> （'+shortMoney(x.prev)+'→'+shortMoney(x.cur)+'）</span></span></div>';
+            }).join("");
+          }},
+        legend:baseLegend,
+        grid:{left:8,right:12,top:34,bottom:8,containLabel:true},
+        xAxis:{type:"category", data:yy, axisLabel:xLabel, axisTick:{show:false}},
+        yAxis:{type:"value",                    // 不设 name：轴名画在 Y 轴顶端，会和顶部图例第一项叠在一起
+          max:cap?Math.round(cap*1.15):null, min:yMin,
+          axisLabel:{fontSize:11, formatter:"{value}%"}, splitLine:{lineStyle:{color:"#eef0f4"}}},
+        series:series
+      };
+    }
+
+    // ---- 分组 / 堆叠 模式
+    var stacked=(mode==="stack");
+    var showLbl=!stacked && years.length*cats.length<=24;
+    var series2=cats.map(function(c){
+      var o={
+        name:c.name, type:"bar", emphasis:{focus:"series"},
+        itemStyle:{color:c.color, borderRadius: stacked?0:[3,3,0,0]},
+        barMaxWidth: stacked?48:22,
+        data: years.map(function(y){ return (vals[c.key]&&vals[c.key][y])||0; })
+      };
+      if(stacked) o.stack="trend";
+      o.label = showLbl
+        ? {show:true, position:"top", fontSize:9, color:"#7a8194", formatter:function(p){ return p.value>0?shortMoney(p.value):""; }}
+        : {show:false};
+      return o;
+    });
+    if(stacked){
+      // 透明占位柱：把每年选中类目的合计标在堆叠顶端
+      series2.push({
+        name:"__total__", type:"bar", stack:"trend", silent:true, barMaxWidth:48,
+        itemStyle:{color:"transparent"}, tooltip:{show:false},
+        data: years.map(function(){ return 0; }),
+        label:{show:true, position:"top", fontSize:10.5, fontWeight:"bold", color:"#4b5563",
+          formatter:function(p){ var t=selTotal[years[p.dataIndex]]||0; return t>0?("¥"+shortMoney(t)):""; }}
+      });
+    }
+    return {
+      tooltip:{trigger:"axis", axisPointer:{type:"shadow"}, confine:true, extraCssText:"max-width:320px;",
+        formatter:function(ps){
+          var y=ps[0].axisValue, py=String(+y-1);
+          var tot=selTotal[y]||0, ptot=selTotal[py]||0;
+          var head='<div style="font-weight:600;margin-bottom:2px;">'+y+' 年 · 合计 ¥'+fmtInt(tot);
+          if(ptot>0){
+            var g=(tot-ptot)/ptot*100;
+            head+=' <span style="color:'+(g>=0?up:down)+';font-size:11px;">'+(g>=0?"↑":"↓")+Math.abs(g).toFixed(1)+'%</span>';
+          }
+          head+='</div>';
+          var arr=ps.filter(function(p){ return p.seriesName!=="__total__" && p.value>0; })
+                    .sort(function(a,b){ return b.value-a.value; });
+          if(!arr.length) return head+'<div style="color:#888;font-size:11px;">当年无数据</div>';
+          var show=arr.slice(0,10), restV=0;
+          arr.slice(10).forEach(function(p){ restV+=p.value; });
+          var lines=show.map(function(p){
+            var prev=(nameVals[p.seriesName]||{})[py]||0;
+            var tag = prev>0
+              ? (function(){ var gg=(p.value-prev)/prev*100;
+                  return '<span style="color:'+(gg>=0?up:down)+';font-size:10px;">'+(gg>=0?"+":"−")+Math.abs(gg).toFixed(0)+'%</span>'; })()
+              : '<span style="color:#b9bec8;font-size:10px;">新增</span>';
+            var pct=tot>0?(p.value/tot*100).toFixed(1)+"%":"—";
+            return '<div style="display:flex;justify-content:space-between;gap:12px;font-size:11px;line-height:1.7;">'
+              +'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+p.marker+esc(p.seriesName)+'</span>'
+              +'<span style="white-space:nowrap;">¥'+fmtInt(p.value)+' <span style="color:#999;">'+pct+'</span> '+tag+'</span></div>';
+          }).join("");
+          if(arr.length>show.length) lines+='<div style="font-size:10.5px;color:#999;margin-top:1px;">其余 '+(arr.length-show.length)+' 项合计 ¥'+fmtInt(restV)+'</div>';
+          return head+lines;
+        }},
+      legend:baseLegend,
+      grid:{left:8,right:12,top:34,bottom:8,containLabel:true},
+      xAxis:{type:"category", data:years, axisLabel:xLabel, axisTick:{show:false}},
+      yAxis:{type:"value", axisLabel:{fontSize:11, formatter:function(v){ return Math.abs(v)>=10000?(v/10000).toFixed(v%10000?1:0)+"w":v; }},
+        splitLine:{lineStyle:{color:"#eef0f4"}}},
+      series:series2
+    };
+  }
+
+  // 同期对比：当年没走完时，用上年同月份区间(1–M月)重算一次，避免整年同比失真
+  function trendSamePeriod(flow, cats, cy, py, months){
+    var keySet={}; cats.forEach(function(c){ keySet[c.key]=true; });
+    var known={}; catsFor(flow).forEach(function(c){ known[c.key]=true; });
+    var fallback=flowDefaultKey(flow);
+    function sumOf(year){
+      var byCat={}, total=0;
+      var rs=state.records.filter(function(r){
+        var dt=r.date||"";
+        if(dt.slice(0,4)!==year) return false;
+        var m=parseInt(dt.slice(5,7),10)||0;
+        return m>=1 && m<=months;
+      });
+      if(rs.length){
+        var agg=catAggregate(rs, flow);
+        Object.keys(agg.byCat).forEach(function(k){
+          var v=agg.net(agg.byCat[k]); if(!(v>0)) return;
+          var key=known[k]?k:fallback;
+          if(!keySet[key]) return;
+          byCat[key]=Math.round(((byCat[key]||0)+v)*100)/100;
+          total+=v;
+        });
+      }
+      return {byCat:byCat, total:Math.round(total*100)/100};
+    }
+    var a=sumOf(cy), b=sumOf(py);
+    return {months:months, cur:a.total, prev:b.total, curByCat:a.byCat, prevByCat:b.byCat};
+  }
+
+  // 卡片底部摘要：最新一年 vs 上一年，总额变化 + 涨跌最大的类目
+  function renderTrendSummary(d, cats, flow){
+    var box=$("#kTrend"); if(!box) return;
+    var years=d.years, vals=d.vals;
+    var flowName = flow==="income"?"收入":(flow==="transfer"?"储蓄/投资":"支出");
+    var note = flow==="transfer"
+      ? '口径：按年独立聚合。储蓄/投资为本金进出，「投资/储蓄」与「赎回/取回」分列展示，不做净额抵扣，故堆叠合计不等于净投入。'
+      : (flow==="income"
+        ? '口径：按年独立聚合，与饼图同源。收入侧已剔除退款行，故各年选中类目全选时的合计等于该年 KPI「全部收入（已扣退款）」。'
+        : '口径：按年独立聚合，与饼图同源。退款优先按原消费类目定向冲减、归属不到的部分对其余类目等比摊分，故各年类目全选时的合计等于该年 KPI「全部支出（已扣退款）」。');
+    if(d.partial) note='注意：'+d.partial.year+' 年只有 1–'+d.partial.months+' 月数据，和上一整年直接比会偏低，请看「同期对比」。'+note;
+    if(!years.length || !cats.length){
+      box.innerHTML='<div class="kpi kpi-note"><div class="l">'+note+'</div></div>';
+      return;
+    }
+    var cy=years[years.length-1], py=years.length>1?years[years.length-2]:"";
+    var partCur=!!(d.partial && d.partial.year===cy), spCat=null;
+    var cur=0, prev=0;
+    cats.forEach(function(c){
+      cur+=(vals[c.key]&&vals[c.key][cy])||0;
+      if(py) prev+=(vals[c.key]&&vals[c.key][py])||0;
+    });
+    var up=trendUpColor(flow), down=trendDownColor(flow);
+    var html='<div class="kpi"><div class="n">¥'+fmtInt(cur)+'</div><div class="l">'+cy+' 年'
+      +(partCur?('（1–'+d.partial.months+'月）'):'')+'选中类目'+flowName+'合计</div></div>';
+    if(py){
+      var diff=cur-prev, g=prev>0?(diff/prev*100):null;
+      var col=diff>=0?up:down;
+      html+='<div class="kpi"><div class="n" style="color:'+col+'">'+(diff>=0?"+":"−")+'¥'+fmtInt(Math.abs(diff))
+        +(g==null?"":' <span style="font-size:12px;">('+(g>=0?"+":"−")+Math.abs(g).toFixed(1)+'%)</span>')
+        +'</div><div class="l">对比 '+py+' 年'+(partCur?'整年':'')+'（¥'+fmtInt(prev)+'）</div></div>';
+      if(partCur){
+        var sp=trendSamePeriod(flow, cats, cy, py, d.partial.months);
+        // 上年数据本身也只落在同期区间内时，同期卡与整年卡完全重复，不再重复展示
+        if(Math.abs(sp.prev-prev)>0.01 && (sp.prev>0 || sp.cur>0)){
+          var sd=sp.cur-sp.prev, sg=sp.prev>0?(sd/sp.prev*100):null;
+          html+='<div class="kpi"><div class="n" style="color:'+(sd>=0?up:down)+'">'+(sd>=0?"+":"−")+'¥'+fmtInt(Math.abs(sd))
+            +(sg==null?"":' <span style="font-size:12px;">('+(sg>=0?"+":"−")+Math.abs(sg).toFixed(1)+'%)</span>')
+            +'</div><div class="l">同期对比：1–'+sp.months+'月 vs '+py+' 年同期（¥'+fmtInt(sp.prev)+'）</div></div>';
+          spCat=sp;
+        }
+      }
+      // 涨跌最大的类目：当年不完整时用同期口径，否则整年比
+      var rows=cats.map(function(c){
+        var a=spCat?(spCat.prevByCat[c.key]||0):((vals[c.key]&&vals[c.key][py])||0);
+        var b=spCat?(spCat.curByCat[c.key]||0):((vals[c.key]&&vals[c.key][cy])||0);
+        return {name:catName(c.key), d:b-a, a:a, b:b};
+      }).filter(function(r){ return Math.abs(r.d)>=0.01; }).sort(function(x,y2){ return y2.d-x.d; });
+      var movLbl=spCat?"（同期）":"";
+      if(rows.length){
+        var top=rows[0], bot=rows[rows.length-1];
+        if(top.d>0){
+          html+='<div class="kpi"><div class="n" style="color:'+up+';font-size:14px;">'+esc(top.name)+' +¥'+fmtInt(top.d)+'</div>'
+            +'<div class="l">增加最多'+movLbl+'（'+shortMoney(top.a)+'→'+shortMoney(top.b)+'）</div></div>';
+        }
+        if(bot.d<0){
+          html+='<div class="kpi"><div class="n" style="color:'+down+';font-size:14px;">'+esc(bot.name)+' −¥'+fmtInt(Math.abs(bot.d))+'</div>'
+            +'<div class="l">减少最多'+movLbl+'（'+shortMoney(bot.a)+'→'+shortMoney(bot.b)+'）</div></div>';
+        }
+      }
+    }
+    html+='<div class="kpi kpi-note"><div class="l">'+note+'</div></div>';
+    box.innerHTML=html;
+  }
+
+  function renderCatTrend(){
+    if(!$("#barCatTrend")) return;
+    var flow=trendState.flow, mode=trendState.mode;
+    var d=trendData(flow);
+    var sumOf={}, keys=Object.keys(d.vals);
+    keys.forEach(function(k){
+      var s=0; Object.keys(d.vals[k]).forEach(function(y){ s+=d.vals[k][y]; });
+      sumOf[k]=Math.round(s*100)/100;
+    });
+    keys.sort(function(a,b){ return sumOf[b]-sumOf[a]; });   // 合计从大到小，堆叠时大类在下
+    trendState._keys=keys;
+    var sel=trendSel(flow, keys);
+    renderTrendCatBar(keys, sumOf, sel);
+
+    var cats=keys.filter(function(k){ return sel.has(k); })
+                 .map(function(k){ return {key:k, name:catName(k), color:catColor(k)}; });
+    // 先算图表配置：同比封顶阈值要写进 meta 文案，所以顺序不能倒
+    var opt=null;
+    if(!d.years.length) opt=emptyChartOption("还没有账单数据");
+    else if(!cats.length) opt=emptyChartOption("未选中任何类目");
+    else opt=catTrendOption(d, cats, mode, flow);
+
+    var meta=$("#trendMeta");
+    if(meta){
+      var tip = mode==="stack" ? " · 柱顶数字为当年选中类目合计"
+              : mode==="yoy"   ? (" · 柱高为各类目当年相对上年的增幅"
+                                  +(trendState._cap?("，超 ±"+trendState._cap+"% 的柱已封顶并标真实值"):""))
+              : " · 悬停查看金额与同比";
+      meta.textContent = keys.length
+        ? (d.years.length?(d.years[0]+"–"+d.years[d.years.length-1]+" 共 "+d.years.length+" 年"):"")
+          +" · 已选 "+cats.length+"/"+keys.length+" 个类目"+(cats.length<keys.length?"（点「全选」看全部）":"")
+          +tip
+        : "";
+    }
+    renderTrendSummary(d, cats, flow);
+    if(window.echarts && opt) ec("barCatTrend").setOption(opt, true);
+  }
+
   function renderStats(){
     if(!window.echarts){
-      ["pieTotal","barTotal","pieMonth","barMonth","pieYear","barYear"].forEach(function(id){
+      ["pieTotal","barTotal","pieMonth","barMonth","pieYear","barYear","barCatTrend"].forEach(function(id){
         var el=$("#"+id); if(el) el.innerHTML='<div class="empty">图表库未加载，请联网后刷新。</div>';
       });
       // still render KPI without echarts
@@ -1515,11 +1929,13 @@
       renderTopInto("topTotal", state.records);
       renderTopInto("topMonth", monthRecs);
       renderTopInto("topYear", yearRecs);
+      renderCatTrend();          // 芯片条与同比摘要不依赖 echarts
       return;
     }
     renderTotal();
     renderMonth();
     renderYear();
+    renderCatTrend();
   }
 
   function resizeCharts(){ Object.keys(charts).forEach(function(k){ try{ charts[k].resize(); }catch(e){} }); }
@@ -1740,6 +2156,41 @@
         else if(scope==="month"){ monthState.pieFlow=flow; renderMonth(); }
         else if(scope==="year"){ yearState.pieFlow=flow; renderYear(); }
       });
+    });
+
+    // 分类年度趋势：流向 + 图形模式
+    var tFlow=document.querySelector(".trend-flow");
+    if(tFlow) tFlow.addEventListener("click",function(e){
+      var b=e.target.closest("button[data-flow]"); if(!b) return;
+      tFlow.querySelectorAll("button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
+      trendState.flow=b.getAttribute("data-flow"); renderCatTrend();
+    });
+    var tMode=document.querySelector(".trend-mode");
+    if(tMode) tMode.addEventListener("click",function(e){
+      var b=e.target.closest("button[data-mode]"); if(!b) return;
+      tMode.querySelectorAll("button").forEach(function(x){x.classList.remove("on");}); b.classList.add("on");
+      trendState.mode=b.getAttribute("data-mode"); renderCatTrend();
+    });
+    // 分类年度趋势：类目芯片（全选 / Top6 / 清空 / 单选切换）
+    var tBar=$("#trendCatBar");
+    if(tBar) tBar.addEventListener("click",function(e){
+      var flow=trendState.flow, keys=trendState._keys||[];
+      var sel=trendState.sel[flow]; if(!sel) return;
+      var tool=e.target.closest("button[data-tcb]");
+      if(tool){
+        var act=tool.getAttribute("data-tcb");
+        sel.clear();
+        if(act==="all") keys.forEach(function(k){ sel.add(k); });
+        else if(act==="top6") keys.slice(0,6).forEach(function(k){ sel.add(k); });   // keys 已按合计降序
+        renderCatTrend();
+        return;
+      }
+      var chip=e.target.closest("[data-tk]");
+      if(chip){
+        var k=chip.getAttribute("data-tk");
+        if(sel.has(k)) sel.delete(k); else sel.add(k);
+        renderCatTrend();
+      }
     });
 
     ["fMonth","fType"].forEach(function(id){ $("#"+id).addEventListener("change",renderList); });
