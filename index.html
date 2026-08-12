@@ -1059,7 +1059,7 @@
     }
     var rfList=refundStat(rows);
     $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtInt(exp)+(inc?(" · 收入 ¥"+fmtInt(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtInt(sav)):"")
-      +(rfList.n?(" · 含退款 ¥"+fmtInt(rfList.amt)+"（明细为原始金额，不冲减）"):"");
+      +(rfList.n?(" · 含退款/群收款 ¥"+fmtInt(rfList.amt)+"（明细为原始金额，不冲减）"):"");
 
     if(!rows.length){
       body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
@@ -1195,23 +1195,45 @@
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
 
-  // ---------------- 退款净额口径（3 张统计卡共用） ----------------
-  // 退款既不算收入，也不算真实支出：支出、收入两侧都扣掉本时段的退款，
-  // 因此「收支盈余」与冲减前完全一致，只是两侧的绝对额都变成净额。
-  var REFUND_CAT = "inc_refundback";
-  function isRefund(r){ return (r&&r.type==="income") && r.category===REFUND_CAT; }
-  // 本时段退款汇总：总额 / 笔数（分桶留给各卡按年、月、日自行冲减）
+  // ---------------- 冲减类收入口径（退款 + 群收款，3 张统计卡共用） ----------------
+  // 这两类进账都不是真实收入，而是把「已经记成支出的钱」找回来：
+  //   退款   —— 消费被商家退回；
+  //   群收款 —— 自己先垫付了整桌/整单，别人再把 AA 份子钱补给你。
+  // 所以支出、收入两侧都扣掉本时段的这类进账，「收支盈余」与冲减前完全一致，
+  // 只是两侧的绝对额都变成净额。
+  var OFFSET_CATS = {inc_refundback:"退款", inc_grouppay:"群收款"};
+  var OFFSET_KEYS = Object.keys(OFFSET_CATS);
+  function isRefund(r){ return !!(r && r.type==="income" && OFFSET_CATS[r.category]); }
+  // 本时段冲减汇总：总额 / 笔数 / 按类目明细（分桶留给各卡按年、月、日自行冲减）
   function refundStat(recs){
-    var amt=0, n=0;
-    (recs||[]).forEach(function(r){ if(isRefund(r)){ amt+=(r.amount||0); n++; } });
-    return {amt:amt, n:n};
+    var amt=0, n=0, by={};
+    OFFSET_KEYS.forEach(function(k){ by[k]={amt:0, n:0}; });
+    (recs||[]).forEach(function(r){
+      if(!isRefund(r)) return;
+      amt+=(r.amount||0); n++;
+      by[r.category].amt+=(r.amount||0); by[r.category].n++;
+    });
+    return {amt:amt, n:n, by:by};
+  }
+  // 本时段真正出现过的冲减类目名（用于 KPI 标签，没有就不写"已扣…"）
+  function offsetNames(rf){
+    var a=[]; OFFSET_KEYS.forEach(function(k){ if(rf.by && rf.by[k] && rf.by[k].n) a.push(OFFSET_CATS[k]); });
+    return a;
   }
   function signedYuan(v){ return (v<0?"−¥":"¥")+fmtInt(Math.abs(v)); }
-  // 卡片下方的口径备注：说明支出/收入已扣掉多少退款
+  // 卡片下方的口径备注：分别说明支出/收入各扣掉了多少退款、多少群收款
   function refundNoteHTML(rf){
-    var txt = rf.n
-      ? '口径：支出已减去本时段退款总额 '+signedYuan(rf.amt)+'（'+rf.n+' 笔），收入也减去同一金额（退款不算收入），故收支盈余不变；饼图优先按退款的原消费类目定向冲减、归属不到的部分再等比摊分，柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。'
-      : '口径：支出与收入均已减去本时段退款总额，本时段无退款记录。';
+    if(!rf.n){
+      return '<div class="kpi kpi-note"><div class="l">口径：支出与收入均已减去本时段的退款与群收款，本时段无此类进账。</div></div>';
+    }
+    var parts=[];
+    OFFSET_KEYS.forEach(function(k){
+      if(rf.by[k].n) parts.push(OFFSET_CATS[k]+' '+signedYuan(rf.by[k].amt)+'（'+rf.by[k].n+' 笔）');
+    });
+    var txt = '口径：支出已减去本时段的'+parts.join(' + ')
+      + (parts.length>1 ? ('，合计 '+signedYuan(rf.amt)) : '')
+      + '；收入也减去同一金额（退款是消费退回、群收款是别人补的 AA 份子钱，两者都不算收入），故收支盈余不变；'
+      + '饼图优先按原消费类目定向冲减、归属不到的部分再等比摊分，柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。';
     return '<div class="kpi kpi-note"><div class="l">'+txt+'</div></div>';
   }
 
@@ -1223,15 +1245,17 @@
       else { exp+=r.amount; expN++; }
     });
     var rf = refundStat(recs);
-    exp -= rf.amt;                       // 退款冲减支出
-    inc -= rf.amt;                       // 退款也不算收入
+    exp -= rf.amt;                       // 退款、群收款冲减支出
+    inc -= rf.amt;                       // 两者都不算收入
+    var offTag = offsetNames(rf);
+    offTag = offTag.length ? '（已扣'+offTag.join('·')+'）' : '';
     var net = inc - exp;                 // 盈余：真实收入 − 真实支出，不含本金进出（冲减后数值不变）
     var netColor = net>=0 ? "#12855a" : "#c0392b";
     var savNet = savOut - savIn;         // 储蓄/投资净额：净投入为正
     var savColor = savNet>=0 ? "#2a6f7a" : "#b06d00";
     var html = ''
-      +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(exp)+'</div><div class="l">全部支出（已扣退款）</div></div>'
-      +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(inc)+'</div><div class="l">全部收入（已扣退款）</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(exp)+'</div><div class="l">全部支出'+offTag+'</div></div>'
+      +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(inc)+'</div><div class="l">全部收入'+offTag+'</div></div>'
       +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(net>=0?"+":"−")+'¥'+fmtInt(Math.abs(net))+'</div><div class="l">收支盈余</div></div>';
     if(savOut||savIn){
       html+='<div class="kpi"><div class="n" style="color:'+savColor+'">'+(savNet>=0?"":"−")+'¥'+fmtInt(Math.abs(savNet))+'</div><div class="l">储蓄/投资净额</div></div>';
@@ -1240,9 +1264,9 @@
     return html;
   }
 
-  // 分类聚合（退款净额口径）：饼图与「分类年度趋势」柱图共用同一实现，保证两处口径不漂移。
-  // 收入侧剔除退款行；支出侧优先按退款的原类目（origCategory）定向冲减，归属不到类目的
-  // 剩余退款再对其余类目等比摊分，保证分类合计与 KPI「全部支出（已扣退款）」一致。
+  // 分类聚合（冲减净额口径）：饼图与「分类年度趋势」柱图共用同一实现，保证两处口径不漂移。
+  // 收入侧剔除退款与群收款；支出侧优先按它们的原消费类目（origCategory）定向冲减，
+  // 归属不到类目的剩余部分再对其余类目等比摊分，保证分类合计与 KPI「全部支出」一致。
   // byCat 为定向冲减后的类目额，仍需经 net() 施加等比摊分系数才是最终净额。
   function catAggregate(recs, flow){
     var flowRecs = (recs||[]).filter(function(r){ return (r.type||"expense")===flow; });
@@ -1269,7 +1293,7 @@
         unattr+=attr[k]-cut;             // 该类目冲不完的部分退回等比摊分池
       });
       var rest=0; Object.keys(byCat).forEach(function(k){ rest+=byCat[k]; });
-      // 退款 ≥ 剩余支出的极端时段：无正数可分，保留类目构成不再摊分
+      // 冲减额 ≥ 剩余支出的极端时段：无正数可分，保留类目构成不再摊分
       if(unattr>0 && rest>0 && rest-unattr>0) scale=(rest-unattr)/rest;
     }
     return {
@@ -1405,14 +1429,14 @@
       else exp+=r.amount;
     });
     var rfAvg=refundStat(recs);
-    exp-=rfAvg.amt; inc-=rfAvg.amt;      // 退款两侧对冲，月均结余不变
+    exp-=rfAvg.amt; inc-=rfAvg.amt;      // 退款与群收款两侧对冲，月均结余不变
     var avgExp=exp/months, avgInc=inc/months, avgNet=(inc-exp)/months;
     var netColor=avgNet>=0?"#12855a":"#c0392b";
     box.innerHTML=''
       +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(avgExp)+'</div><div class="l">月均支出</div></div>'
       +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(avgInc)+'</div><div class="l">月均收入</div></div>'
       +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(avgNet>=0?"+":"−")+'¥'+fmtInt(Math.abs(avgNet))+'</div><div class="l">月均结余</div></div>'
-      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已减去区间内退款总额 '+signedYuan(rfAvg.amt)+'）</div></div>';
+      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已减去区间内退款与群收款合计 '+signedYuan(rfAvg.amt)+'）</div></div>';
   }
   function renderTotal(){
     var months=monthsInRange();
@@ -1438,7 +1462,7 @@
       var y=(r.date||"").slice(0,4);
       if(!(y in expByY)) return;
       if(r.type==="income"){
-        if(isRefund(r)) expByY[y]-=r.amount;   // 退款不计收入，改为冲减当年支出
+        if(isRefund(r)) expByY[y]-=r.amount;   // 退款/群收款不计收入，改为冲减当年支出
         else incByY[y]+=r.amount;
       }
       else if(r.type==="transfer"){ if(r.category!=="sav_in") savByY[y]+=r.amount; }
@@ -1486,7 +1510,7 @@
       var dd=(r.date||"").slice(8,10);
       if(!(dd in expByD)) return;
       if(r.type==="income"){
-        if(isRefund(r)) expByD[dd]-=r.amount;   // 退款不计收入，改为冲减当日支出
+        if(isRefund(r)) expByD[dd]-=r.amount;   // 退款/群收款不计收入，改为冲减当日支出
         else incByD[dd]+=r.amount;
       }
       else if(r.type==="transfer"){ if(r.category!=="sav_in") savByD[dd]+=r.amount; }
@@ -1525,7 +1549,7 @@
       var mo=(r.date||"").slice(5,7);
       if(!(mo in expByM)) return;
       if(r.type==="income"){
-        if(isRefund(r)) expByM[mo]-=r.amount;   // 退款不计收入，改为冲减当月支出
+        if(isRefund(r)) expByM[mo]-=r.amount;   // 退款/群收款不计收入，改为冲减当月支出
         else incByM[mo]+=r.amount;
       }
       else if(r.type==="transfer"){ if(r.category!=="sav_in") savByM[mo]+=r.amount; }
@@ -1818,8 +1842,8 @@
     var note = flow==="transfer"
       ? '口径：按年独立聚合。储蓄/投资为本金进出，「投资/储蓄」与「赎回/取回」分列展示，不做净额抵扣，故堆叠合计不等于净投入。'
       : (flow==="income"
-        ? '口径：按年独立聚合，与饼图同源。收入侧已剔除退款行，故各年选中类目全选时的合计等于该年 KPI「全部收入（已扣退款）」。'
-        : '口径：按年独立聚合，与饼图同源。退款优先按原消费类目定向冲减、归属不到的部分对其余类目等比摊分，故各年类目全选时的合计等于该年 KPI「全部支出（已扣退款）」。');
+        ? '口径：按年独立聚合，与饼图同源。收入侧已剔除退款与群收款，故各年选中类目全选时的合计等于该年 KPI「全部收入」。'
+        : '口径：按年独立聚合，与饼图同源。退款与群收款优先按原消费类目定向冲减、归属不到的部分对其余类目等比摊分，故各年类目全选时的合计等于该年 KPI「全部支出」。');
     if(d.partial) note='注意：'+d.partial.year+' 年只有 1–'+d.partial.months+' 月数据，和上一整年直接比会偏低，请看「同期对比」。'+note;
     if(!years.length || !cats.length){
       box.innerHTML='<div class="kpi kpi-note"><div class="l">'+note+'</div></div>';
