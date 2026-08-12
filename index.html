@@ -491,10 +491,11 @@
   var EXP_CATS = cloneCats(EXP_CATS_DEFAULT);
   var INC_CATS = cloneCats(INC_CATS_DEFAULT);
   var TRA_CATS = cloneCats(TRA_CATS_DEFAULT);
-  var ALL_CATS = [], CAT_BY_KEY = {};
+  var ALL_CATS = [], CAT_BY_KEY = {}, catsVer = 0;
   function rebuildCats(){
     ALL_CATS = EXP_CATS.concat(INC_CATS).concat(TRA_CATS);
     CAT_BY_KEY = {}; ALL_CATS.forEach(function(c){ CAT_BY_KEY[c.key]=c; });
+    catsVer++;   // 类目配置一变，分类关键词表下次调用时重建
   }
   rebuildCats();
 
@@ -535,15 +536,159 @@
   // 判断一笔是否收入用的关键词（辅助 OCR 自动判定，符号更权威）
   var INCOME_KW = ["收入","退款","转入","收款","工资","薪资","奖金","红包收","返现","报销","利息","分红","收益","赎回","到账","入账","已收","向你转账","给你转账"];
 
-  function classify(text, type){
-    var cats = catsFor(type);
-    var t = (text||"").toLowerCase();
-    for(var i=0;i<cats.length;i++){
-      var c=cats[i];
-      for(var j=0;j<c.kw.length;j++){ if(t.indexOf(c.kw[j].toLowerCase())>=0) return c.key; }
-    }
-    return type==="income" ? "inc_other" : (type==="transfer" ? "sav_out" : "other");
+  // ---------------- 自动分类引擎 v2 ----------------
+  // 四层优先级：① 结构规则(凭证语义，最可信) ② 商户字典(历史 2.4 万笔统计出的稳定商户)
+  //             ③ 强关键词(类目配置 kw + 内置补充 KW_ADD，长词优先) ④ 弱关键词(泛词，最后兜底)
+  // 商户字典按 FNV-1a 32 位哈希存放：本页面是公开静态站，明文商户里含真实联系人姓名，不能直接暴露。
+  // 明文对照表与生成脚本见桌面《记账站自动分类规则总表》；改词后须重算哈希再回填。
+  var MDICT_H = {
+    "beauty":"10wwgo5,11l8gxv,129kr84,14vrsbp,17vtnnb,18umpv5,1ah72j3,1b3qsgd,1fwpq0u,1kg6if,1kjvwey,1l65zxe,1le1mms,"+
+      "1pt6gp8,1qmi9ja,1vxy8gq,4inda2,7h0jzf,axjlzg,bxr5cm,d09h53,dk8oj1,f8cuok,fl4s4e,myqhr1,uc72ue,wys9n3,yeb5ab",   // 28 个商户
+    "cust_msd1dulvgof":"18puoi4,1q3w0k1,pqtqhf",   // 3 个商户
+    "cust_msd1ej307fj":"11r67k8,14exqhw,19w60wd,1bdsrdn,1c65vma,1craav,1d7eefi,1gl3mw4,1l4riq6,1lk8zh2,1rdycr6,2b2que,2ccxa2,35ernv,"+
+      "36d74k,49olay,9dnl7i,g3m9vz,gb8542,mjb5c3,p0y96i,ury5dk,xnxkjt",   // 23 个商户
+    "daily":"1avkb27,1lorwgj,1r51fmy,1sx8ctv,1szcsnk,3k5pge,4nh6by,dk9fyx,ecbcz8,ldwlex,loo7fw,mh4f2a,pufpw6,u6zgt2",   // 14 个商户
+    "digital":"1f6gk93,1fhud50,1k9ngja,1nvr351,1tvg4ly,1wboya9,57vkxh,6xfpe6,d69qzo,e51q72,k4iosk,mx9wrn,vmxmq8,wfaypf",   // 14 个商户
+    "edu":"1at2ggl,5qlzki,a7r2tt,atsktd,jowhih,udm8rw,ygfknh",   // 7 个商户
+    "food":"104fm8b,1065dv4,10nmief,10tk6ci,10z6qld,114c82f,11r7cym,11s1xjg,11yxsbi,13o1x0d,13qf64y,13xl383,148qixw,"+
+      "14ceubi,14la9cr,14oub95,1545zuc,15eftpm,15glpth,15k3qow,15x8wz5,16nv243,1770h8o,179apap,17dtnnj,17f5cfd,"+
+      "17is7ie,17mn26h,17zwwh7,185nyit,18bixyq,18qyuaj,1965x0k,19wgfqt,1a8kpe7,1awx5pc,1b545oc,1bfndmd,1chrt6c,"+
+      "1cm8uwt,1cnq4ut,1d0lyn8,1di5bwd,1dljko6,1dnrgbz,1dqlfsk,1ekxyft,1eo32ct,1f3xdou,1f7h1ke,1fhqh4p,1fk286j,"+
+      "1fmpoc9,1fu3fx0,1fwdc9b,1fzhkom,1g428tt,1gnjubo,1hm5jua,1hn553a,1hndteq,1ho7yuy,1hsf2kf,1i3rbcz,1i3y13c,"+
+      "1i8ynp5,1iytlnq,1j0ow8h,1j3lczl,1jdztsw,1jk9hai,1jsh0oj,1k1rhf9,1k8a75g,1koeb7l,1l8iyk5,1mbupe1,1mhxz8e,"+
+      "1mt2l3v,1mxyvwj,1njrsrx,1nms53p,1nt2qt4,1nuhru0,1ob6ojf,1olid3u,1ov87b6,1p1kdb4,1pc5pi3,1pe2b9d,1phnh21,"+
+      "1pq0ite,1qc33ds,1qcxvo,1qlh2zf,1r0tkcy,1r22piy,1rpd5e5,1sfd2x0,1sk3ugc,1sx51ok,1tgbdth,1tlade2,1tlnqxv,"+
+      "1tp4oob,1tpl2hf,1tumtg8,1u9hv5u,1ufssca,1uqy81d,1uxdqi2,1v1696n,1vee93v,1vwt9oq,1vxizzt,1wef8yy,1wnjbqg,"+
+      "1x5ql7z,1xcynbc,1xflsq4,1xh47pw,1xpcrpa,1xqvn75,1yckm32,1ygvwyz,1yk5vp4,1ytsfgt,1yuqal7,2jzzqb,34a3c8,"+
+      "36d1zb,3jkuuo,3q7vw4,40el80,48diu4,4jlwke,4oktd2,4udeax,4z0fj6,53qztn,55pckz,5fyw4g,5qv9ks,5t6ixd,5yjyex,"+
+      "60po8z,614j6v,65pdob,674t8f,6m9aty,79wwkg,7yz5dr,828k46,88o3ri,8bp7wp,8o1d0m,8o29q3,8zr3f9,9dvwuz,9oltst,"+
+      "a1v9zd,a6nnku,agbhrx,aoqcpn,aq9n5p,b813rb,bi0pga,bp9l0a,bxuxtq,c2436q,ccqnws,crm6xi,cxnsxq,d71uyu,dl3tte,"+
+      "dom0a5,e0ghhq,e74lmu,etk1ts,evz7ti,f9swek,gazox9,gweyzz,h86mwo,hl06hu,i21kpq,iao7l7,j0flsp,j275t0,j2qc6w,"+
+      "jzxjii,k93fed,kbuf3d,khdeuj,l1vr9j,laudvy,lhgumz,lm7w62,lqfenr,m46syv,m8r56g,mc0d5f,mgx3j9,mxh57r,nbsqk6,"+
+      "ns8duq,nsefol,nuxbdq,o68jy7,ofm0sj,oqq7x6,p6ya4d,q0guge,q36ohx,qfklp5,qxu1o2,rrqlb4,rxl3o2,s25nu1,s3ybxm,"+
+      "s5zaww,sbec1l,t4yjry,t8acj9,tb9czq,tbwv0g,tdhiv6,tewpzq,tivjbm,ua3vwg,ujlc9m,uxoaui,v8i81e,w1vvpl,w29byd,"+
+      "w3kgb4,we0jc8,wsmbn4,wt96oj,x0wh6o,x2lp56,xcl8tq,xd8e2h,xx1vgy,xx7lgf,y7775e,zrtvzu,zs7c9c,zy6efd",   // 249 个商户
+    "fun":"14d12d6,197w05n,1am57vk,1bghpl8,1bkvjv9,1crvss,1e850mk,1gflmit,1gknvgo,1iqbc9r,1o8h9a6,1p1q68k,1qrjemc,"+
+      "1r9ikks,1t1mrko,1tp2zir,1ucwsdg,1x4nss6,99anah,a9nazw,agiymh,c5o8zx,dlmyng,euauij,ex92c1,g23rji,j3iuxz,"+
+      "siuav7,v1q58l,v8on82,wm163g,ww4p3h,yryj9z,z2h8qn",   // 34 个商户
+    "group_pay":"1k0gnsa",   // 1 个商户
+    "housing":"129aqv3,146nd5d,1abvtn8,1cfjb4c,1fn5v72,1gsipdp,1uck1br,bgxj1s,djj0da,g72e26,tdzt4z,tnrqum,ykseuq",   // 13 个商户
+    "inc_grouppay":"18fgcd3,1g7gz30,1ghzyxs,1tkeyy0,1vgz3xd,1wne1of,1xn59m0,1xvwuk,1ygsap3,1yxg4yp,8z0i4i,awtaq,kv71zk,o43hef,"+
+      "usvgtw,w9fgct,z1fkw4",   // 17 个商户
+    "inc_invest":"1fyjvxf,txwz2h",   // 2 个商户
+    "inc_refund":"mruaw7",   // 1 个商户
+    "inc_refundback":"116cypc,12pzqai,13ebto,14vke44,16bbu4v,1bhc3mm,1bq1eeb,1c2sxg4,1e806i3,1hbhj28,1ivn5r0,1p14ef0,1rmeznh,"+
+      "1wwvkv2,1wxr42s,1xbzieg,1xw364p,26tbey,3ho6q5,7cjyu2,aj8njl,ihezxw,qzlplr,ves8kh",   // 24 个商户
+    "inc_salary":"1yb9ltb,to8cow",   // 2 个商户
+    "inc_transfer":"10bdi39,10jcqk7,10ob9wz,11dhre3,11hh73b,123sxte,12o1ftq,13srmwd,13whwzn,13xv39r,14gyed6,15h2a13,15t2a9x,"+
+      "16amipj,16mp0z3,16nzdnk,17w56sq,18py9rv,1a1n6ok,1amck2e,1aq1x8c,1arnx6b,1ask5x3,1b3ccn6,1b8bop3,1bd054t,"+
+      "1bdagtf,1bdgqz3,1bsjyhu,1cq0l3n,1d3dc8i,1d565wo,1dzqopx,1ea4gpw,1ek8ahb,1el7x8y,1f01n1e,1f4o0qb,1fk0j21,"+
+      "1ghc5g,1gpibqc,1gpmk8t,1gujwbd,1i05n4,1i3lq95,1icofx1,1iq9xi,1jmcaie,1kgypm3,1kktwlu,1ku9vtb,1lg4un1,"+
+      "1m6z1j4,1mkakxe,1n8z3ge,1nnl9tn,1no1o6t,1nv01eu,1nztg66,1o8inbo,1on6832,1ondnya,1p7n4st,1prv27m,1qmlshx,"+
+      "1rm9s63,1s293g0,1svz9rg,1thjpyz,1trsxg7,1uoib4w,1utzm8e,1vcbnhq,1vfuj6z,1vidgq9,1wjxqjc,1xi7k3s,1xket94,"+
+      "1xsbi9l,1zdx6t,2835pb,2a9v1n,2y0s41,3qn5nl,3sxvbl,41cvog,49eff8,4kgu37,4n7bd8,65s1ym,7e8nqy,7gaol7,8a0yi6,"+
+      "8l3skf,ak280i,bb57j,bmq110,cf390e,cffc8z,cfxq0s,cviyy6,dfxzzk,djedff,dkz1aq,dvxgc6,e7qy1r,ecm0qa,ewl81h,"+
+      "ff2iln,fgnlbl,fp7jxh,fux8fh,g38lkv,gzcyvf,hplylv,i2uves,iu58qn,izryqg,j3ci1d,j3ntqm,j6ku6x,j6tcht,jducb9,"+
+      "jxa8q7,k6qsqa,kjp9c8,lozwji,ma2y63,mbut9u,mpg4oe,ohs72d,ony6fa,pegfig,phbolz,pn7cty,qhn9el,r00kwb,rbh52d,"+
+      "rd4ocb,rixafq,rue95o,sk0822,tbxkon,up0h9l,upknv,v404g7,v5tn5n,vste1l,wlbt8z,wq6yi5,xx5php,yarsti,yeq7mx",   // 153 个商户
+    "medical":"1617a0d,1iryk8g,1nok33y,8wmrzp,cj6my4,dzclrq,fdoago,jlrbvd,l9b6xj",   // 9 个商户
+    "other":"135ls9l,14wyvz8,15bhqn8,16ex2no,17m4cc6,191q08t,1b88kmp,1emp8ra,1f6u2w,1gp9e4o,1hewsny,1k4836o,1ks2cjl,"+
+      "1n5aons,1nfccv1,1nm85n1,1no2mxk,1oank9i,1of28wi,1rajp8p,1ri3ack,1y0j2rx,49qvm8,5ak6bp,8toixt,a1tj59,bt1vld,"+
+      "c3315c,e93wi7,egb2xk,gc1sbs,guyxt4,jh4dvw,jmwlaj,jy4x3z,jyzs1p,kdssg,l0peti,lqaypf,mdc0lv,mlsdxv,nx865z,"+
+      "oe76ko,opr5x0,pm8hu6,uh1rax,vn0i04,vtne9c,vxqfud,xg3sh9,zfn030",   // 51 个商户
+    "provident_fund":"1dso2fk,1u37suf",   // 2 个商户
+    "sav_in":"1wx4e8z,6dhjyi,88ou4p,gvf69f,j5vlhm,kw6nr4,xkpiv9",   // 7 个商户
+    "sav_out":"10duat3,16wfwos,17viy9b,1839dji,18wh6e9,1c3ysyn,1e7yguq,1jlpty9,1mcfiew,1rpzn4h,1szl7jc,1xo6j8a,6ryc05,"+
+      "6si97i,7mk32u,7qmcv5,f93vl4,fubme9,m9hoxr,qdyrdl,rg1tq9,t6zck0,vrsstd,x8v9i8",   // 24 个商户
+    "shopping":"1b72ktt,1giprlu,1mkrj9j,1mor38d,1raryag,1y77e6u,qe31ik,v9njut",   // 8 个商户
+    "transfer":"100dqf3,1116w3o,11b0psc,151f1v2,1880rkj,1hd4rwd,1jup9y,1mmi2sp,1o4lu3o,1orblri,1pv96b6,1ryl7d3,1slvbxi,"+
+      "1xn0kvp,3xvlpl,5iegpk,a2i2t3,bgh4s0,e8i2p5,gn21ve,jurbr,kg90tb,luuopk,p2vgkf,syts62,tzhfbs,u9a20o,up3kl7,"+
+      "w4zxds,wtnabd,xj2t4g,yelw40",   // 32 个商户
+    "transit":"11a1f2k,14huup4,1681wk6,16ajqz7,17imlop,18irrn1,1aeg0up,1c6o2l0,1fx1rrx,1h0rkz7,1jnhx6f,1kfcxc5,1rb535a,"+
+      "1sojz4g,1txynm4,1vgs9o9,1wanqey,649zke,8y88su,9qbybz,avjibb,by1zqj,c1fy0i,g4zqnb,ihdmb2,lk6vlv,m3c3dl,"+
+      "mz6cp9,n8qpb,nh6xsk,o649u0,pxq9em,tuokl2,vyuowd,yk83m5",   // 35 个商户
+    "travel":"108lxnf,11k4dz1,15clcij,16yc0dv,1j6gm5p,1kfdhh,1uifylb,1vuqi95,4co8j8,74yplu,iedh3y,lqzsgy,pvfl80,tdab56"   // 14 个商户
+  };
+  var KW_ADD = {
+    "food":["料理","烤肉","牛肉面","小吃","菜馆","食府","大排档","私房菜","烘焙","面包","蛋糕","米线","馄饨","饺子","麻辣烫","酸菜鱼","外卖订单","闪购","茶百道","沪上阿姨","古茗","霸王茶姬","幸运咖","便当","餐","食堂","水饺","粥","烤鱼","日料","寿司","自助餐","小龙虾","熟食","鲜果","菜市","农贸","土猪肉","猪肉","牛排","烤全羊","本帮","川菜","湘菜","食品"],
+    "transit":["单车","出行","客运","公共交通","轨道交通","市民卡","骑安","拜克洛克","地铁"],
+    "daily":["五金","家居","收纳","洗衣","家政","开锁","快递","菜鸟","驿站","米店"],
+    "medical":["推拿","中医","齿科","正畸","视光","眼药"],
+    "edu":["书屋","书店","图书","培训中心","驾校"],
+    "fun":["ktv","纯k","足道","洗浴","桌游","棋牌","酒馆","清吧","轰趴","荣耀 皮肤","王者"],
+    "digital":["数据线","充电线","显示器","数码","手机壳"],
+    "travel":["农家乐","客栈","度假","旅行社","山庄","温泉"],
+    "beauty":["服饰","袜","羽绒服","男装","女装","外套","洗面奶","香水","美甲"],
+    "transfer":["转账备注","微信转账","转账汇款","发出群红包","借款","还钱","押金"],
+    "cust_msd1ej307fj":["猫粮","猫砂","猫舍","猫咪","渐层","布偶猫","缅因","猫藓","猫用","宠物用品","逗猫","猫爬架","猫罐头","宠物医院","猫抓板","猫笼","小公","小母","一窝","打包"],
+    "cust_msd1dulvgof":["卖猫","小胖子宠物"],
+    "inc_transfer":["红包","转账","摇心愿","商户消费"]
+  };
+  var KW_WEAK = {
+    "shopping":["旗舰店","专营店","专卖店","平台商户","商城","购物","淘宝","天猫","京东","拼多多","抖音","商店","商品"]
+  };
+  // 这些词从"群收款"里摘掉，改由 转账/红包 承接（发出群红包=自己发的红包，不是 AA）
+  var KW_DROP = { group_pay:["发出群红包","微信aa","微信AA"] };
+
+  function fnv1a(s){ var x=0x811c9dc5; for(var i=0;i<s.length;i++){ x^=s.charCodeAt(i); x=Math.imul(x,0x01000193)>>>0; } return x.toString(36); }
+  var _clsVer=-1, MDICT=null, KWT1=null, KWT2=null, CAT_VALID=null;
+  function buildClassifier(){
+    MDICT={};
+    Object.keys(MDICT_H).forEach(function(cat){
+      String(MDICT_H[cat]).split(",").forEach(function(h){ if(h) MDICT[h]=cat; });
+    });
+    KWT1={}; KWT2={}; CAT_VALID={};
+    ["expense","income","transfer"].forEach(function(t){
+      var t1=[], t2=[], valid={};
+      catsFor(t).forEach(function(c){
+        valid[c.key]=1;
+        var drop=KW_DROP[c.key]||[], weak=KW_WEAK[c.key]||[], add=KW_ADD[c.key]||[];
+        var kws=(c.kw||[]).filter(function(k){ return k && drop.indexOf(k)<0 && weak.indexOf(k)<0; });
+        add.forEach(function(k){ if(kws.indexOf(k)<0) kws.push(k); });
+        kws.forEach(function(k){ t1.push([String(k).toLowerCase(), c.key]); });
+        weak.forEach(function(k){ if(k) t2.push([String(k).toLowerCase(), c.key]); });
+      });
+      var byLen=function(a,b){ return b[0].length-a[0].length; };   // 长词优先：别让"餐"抢在"餐饮酒店"前面
+      KWT1[t]=t1.sort(byLen); KWT2[t]=t2.sort(byLen); CAT_VALID[t]=valid;
+    });
+    _clsVer=catsVer;
   }
+  // ① 结构规则：只认账单凭证里的强语义，优先级高于任何关键词
+  function structRule(merchant, note, raw, type){
+    var m=String(merchant||""), s=String(note||"")+" "+String(raw||"");
+    if(s.indexOf("群收款")>=0) return type==="income" ? "inc_grouppay" : "group_pay";
+    if(/^退款[:：]/.test(note||"") || /\|退款[:：]/.test(raw||"")) return type==="income" ? "inc_refundback" : null;
+    if(s.indexOf("退税")>=0) return type==="income" ? "inc_refund" : null;
+    if(type==="transfer"){
+      if(/赎回|取回|支取|转回|银证转入/.test(s)) return "sav_in";
+      if(/申购|买入|定投|银证转账|定存|存入|转入理财/.test(s)) return "sav_out";
+    }
+    if(type==="income"){
+      if(/代发工资|网上代发代扣|工资|薪资|奖金|年终奖|绩效/.test(s)) return "inc_salary";
+      if(/公积金/.test(m+s)) return "provident_fund";
+    }
+    return null;
+  }
+  // 主入口：商户 / 备注 / 原始行分开传，商户命中优先于备注命中
+  function classifyRec(merchant, note, raw, type){
+    type = (type==="income"||type==="transfer") ? type : "expense";
+    if(_clsVer!==catsVer || !MDICT) buildClassifier();
+    var valid=CAT_VALID[type], i;
+    var st=structRule(merchant,note,raw,type);
+    if(st && valid[st]) return st;
+    var mm=String(merchant||"").trim();
+    if(mm){ var hit=MDICT[fnv1a(mm)]; if(hit && valid[hit]) return hit; }
+    var ml=mm.toLowerCase(), tl=(String(note||"")+" "+String(raw||"")).toLowerCase();
+    var t1=KWT1[type], t2=KWT2[type];
+    for(i=0;i<t1.length;i++){ if(ml.indexOf(t1[i][0])>=0) return t1[i][1]; }
+    for(i=0;i<t1.length;i++){ if(tl.indexOf(t1[i][0])>=0) return t1[i][1]; }
+    for(i=0;i<t2.length;i++){ if(ml.indexOf(t2[i][0])>=0) return t2[i][1]; }
+    for(i=0;i<t2.length;i++){ if(tl.indexOf(t2[i][0])>=0) return t2[i][1]; }
+    return flowDefaultKey(type);
+  }
+  // 兼容旧签名（只有一整段文本时）
+  function classify(text, type){ return classifyRec("", text, "", type); }
+  try{ window.__cls={ hash:fnv1a, rec:classifyRec, build:buildClassifier }; }catch(e){}
 
   // ---------------- utils ----------------
   var $=function(s,r){return (r||document).querySelector(s);};
@@ -582,7 +727,9 @@
     // 自定义分类：本地兜底(云端就绪后会被云端配置覆盖)
     loadCatConfigLocal();
   }
+  var dataRev=0;   // 数据版本号：任何一次落盘都自增，供列表缓存判失效
   function save(){
+    dataRev++;
     try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
     catch(e){ toast("本地保存失败："+e.message,true); }
   }
@@ -594,25 +741,43 @@
     var map={ local:["本地模式","#7a8194"], connecting:["连接云端…","#f59e0b"],
               synced:["已云同步","#10b981"], offline:["离线·待同步","#ef4444"], nocloud:["本地模式（未建表）","#7a8194"],
               locked:["未解锁","#7a8194"], badsecret:["密钥错误","#ef4444"] };
-    var v=map[s]||map.local; el.textContent="● "+v[0]; el.style.color=v[1];
+    var v=map[s]||map.local; var txt=v[0];
+    if((s==="offline"||s==="local") && state && state.pendingOps && state.pendingOps.length) txt+="（"+state.pendingOps.length+" 笔待上传）";
+    el.textContent="● "+txt; el.style.color=v[1];
     var yl=$("#yearLoad"); if(yl) yl.style.display = (s==="connecting") ? "block" : "none";
   }
   function rowFromRec(r){ return { id:r.id, ts:r.date||null, amount:r.amount||0, category:r.category||"other", data:r, updated_at:new Date().toISOString() }; }
-  function recFromRow(row){ var r=row.data||{}; r.id=row.id; return r; }
+  function recFromRow(row){
+    var r=row.data||{}; r.id=row.id;
+    // 顶层列是权威值：直接改库（批量重分类等）时前端也要跟上
+    if(row.ts) r.date=row.ts;
+    if(row.amount!==null && row.amount!==undefined) r.amount=Number(row.amount)||0;
+    if(row.category) r.category=row.category;
+    r._srvTs = row.updated_at ? (Date.parse(row.updated_at)||0) : 0;
+    return r;
+  }
   function queueOp(op){
     var idOf=op.id;
     state.pendingOps=(state.pendingOps||[]).filter(function(o){return o.id!==idOf;});
     state.pendingOps.push(op); save();
   }
+  function addTomb(id){
+    state.tombstones=state.tombstones||{};
+    state.tombstones[id]=Date.now();
+    // 90 天后自动清理，避免无限膨胀
+    var cut=Date.now()-90*86400000;
+    Object.keys(state.tombstones).forEach(function(k){ if(state.tombstones[k]<cut) delete state.tombstones[k]; });
+  }
   function cloudUpsert(r){
-    if(!CLOUD_ON) return;
+    if(!CLOUD_ON || !SB){ queueOp({op:"upsert",id:r.id}); return; }   // 离线不丢写，先入队
     SB.from(TABLE).upsert(rowFromRec(r)).then(function(res){
       if(res.error){ queueOp({op:"upsert",id:r.id}); setCloudStatus("offline"); }
       else setCloudStatus("synced");
     });
   }
   function cloudDelete(id){
-    if(!CLOUD_ON) return;
+    addTomb(id);
+    if(!CLOUD_ON || !SB){ queueOp({op:"delete",id:id}); return; }
     SB.from(TABLE).delete().eq("id",id).then(function(res){
       if(res.error){ queueOp({op:"delete",id:id}); setCloudStatus("offline"); }
       else setCloudStatus("synced");
@@ -627,14 +792,18 @@
       else setCloudStatus("synced");
     });
   }
+  function pendingCount(){ return (state.pendingOps||[]).length; }
   function flushOutbox(){
-    if(!CLOUD_ON || !state.pendingOps || !state.pendingOps.length) return;
+    if(!CLOUD_ON || !SB || !state.pendingOps || !state.pendingOps.length) return;
     var ops=state.pendingOps.slice(); state.pendingOps=[]; save();
     ops.forEach(function(o){
       if(o.op==="delete") cloudDelete(o.id);
       else { var r=state.records.find(function(x){return x.id===o.id;}); if(r) cloudUpsert(r); }
     });
   }
+  // 网络恢复 / 定时兜底：不让待同步队列一直挂着
+  if(window.addEventListener) window.addEventListener("online", function(){ flushOutbox(); });
+  setInterval(function(){ if(pendingCount()) flushOutbox(); }, 60000);
   function initCloud(){
     var bad=!SUPABASE_URL||!/^https:\/\//.test(SUPABASE_URL)||!SUPABASE_ANON_KEY;
     if(bad||!window.supabase||!window.supabase.createClient){ setCloudStatus("local"); renderAll(); return; }
@@ -653,10 +822,10 @@
         if(missing){
           setCloudStatus("nocloud"); CLOUD_ON=false; renderAll(); return;
         }
-        // permission/RLS/other -> treat as bad secret
-        setCloudStatus("badsecret"); CLOUD_ON=false;
-        localStorage.removeItem(SECRET_STORE_KEY);
-        showLoginModal("密钥不对，请重新输入"); renderAll(); return;
+        // 其它错误（网络抖动 / RLS 临时故障）不能当成密钥错——密钥必须保住
+        setCloudStatus("offline"); CLOUD_ON=false;
+        console.warn("verify_expense_secret error, 保留密钥按离线处理", vres.error);
+        renderAll(); return;
       }
       if(vres.data!==true){
         setCloudStatus("badsecret"); CLOUD_ON=false;
@@ -667,11 +836,20 @@
       // so keep walking Range windows until a short page is returned.
       // 先加载最近的数据：按 ts 倒序取，第一页(最新1000条)到手即渲染，其余在后台续拉。
       var PAGE=1000, offset=0, cloudById={}, aborted=false, firstDone=false;
+      function stampOf(r){ return Number(r && (r.updatedAt || r._srvTs || r.createdAt)) || 0; }
       function mergeCloudIntoState(){
-        var merged={};
+        var merged={}, pend={}, tomb=state.tombstones||{};
+        (state.pendingOps||[]).forEach(function(o){ pend[o.id]=1; });
         state.records.forEach(function(r){ merged[r.id]=r; });
-        Object.keys(cloudById).forEach(function(id){ merged[id]=cloudById[id]; });
-        state.records=Object.keys(merged).map(function(k){ return merged[k]; });
+        Object.keys(cloudById).forEach(function(id){
+          var c=cloudById[id], l=merged[id];
+          if(!l){ merged[id]=c; return; }
+          if(pend[id]) return;                                  // 本地有未同步改动 → 本地优先
+          merged[id] = (stampOf(l) > stampOf(c)) ? l : c;       // 否则谁新用谁
+        });
+        state.records=Object.keys(merged)
+          .filter(function(k){ return !tomb[k]; })              // 本地已删除的不复活
+          .map(function(k){ return merged[k]; });
       }
       function nextPage(){
         SB.from(TABLE).select("*").order("ts",{ascending:false}).order("id",{ascending:false}).range(offset, offset+PAGE-1).then(function(res){
@@ -805,7 +983,7 @@
         date:dt,
         amount:best.p.value,
         type:isIncome?"income":"expense",
-        category:classify(merchant+" "+line, isIncome?"income":"expense"),
+        category:classifyRec(merchant, "", line, isIncome?"income":"expense"),
         merchant:merchant,
         source:source||"截图",
         note:"",
@@ -890,17 +1068,23 @@
     else toast("这些图里没识别到交易，可手动添加",true);
   }
 
-  function sigOf(date,amount){ return date+"|"+(Math.round(Number(amount)*100)/100); }
+  // 去重签名：日期+金额太粗（全库有 1648 组同日同额但不同笔的真实交易），
+  // 加上商户与收支方向，避免"同一天两杯 18 元咖啡"被当成重复吞掉。
+  function normMer(m){ return String(m||"").trim().toLowerCase().replace(/\s+/g,""); }
+  function sigOf(date,amount,merchant,type){
+    return date+"|"+(Math.round(Number(amount)*100)/100)+"|"+normMer(merchant)+"|"+(type||"expense");
+  }
   function existingSigs(){
-    var s={}; state.records.forEach(function(r){ s[sigOf(r.date,r.amount)]=true; }); return s;
+    var s={}; state.records.forEach(function(r){ s[sigOf(r.date,r.amount,r.merchant,r.type)]=true; }); return s;
   }
   function markDupsInReview(){
     var exist=existingSigs();
     var seen={};
     reviewRows.forEach(function(r){
-      var sg=sigOf(r.date,r.amount);
+      var sg=sigOf(r.date,r.amount,r.merchant,r.type);
       r._dup = !!exist[sg] || !!seen[sg];
-      r._include = !r._dup;
+      // 只标记、不代替用户决定：疑似重复仍默认勾选，避免真实交易被静默丢弃
+      if(r._include===undefined) r._include = true;
       seen[sg]=true;
     });
   }
@@ -1053,7 +1237,7 @@
     var yrEl=$("#fYear"), yr=yrEl?yrEl.value:"";
     var mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
     var filterSig=[catSig,yr,mon,typ,kw,$("#fAmtMin").value.trim(),$("#fAmtMax").value.trim()].join("|");
-    var dataSig=filterSig+"|"+state.records.length;
+    var dataSig=filterSig+"|"+state.records.length+"|"+dataRev;
     var rows;
     if(filterSig!==listState._sig){
       // 筛选条件变了：重算并回到第一页
@@ -1141,8 +1325,11 @@
   function saveEdit(id){
     var r=state.records.find(function(x){return x.id===id;}); if(!r) return;
     var tr=$('#listBody tr[data-id="'+id+'"]'); if(!tr) return;
+    var rawAmt=$(".e-amt",tr).value, numAmt=parseFloat(rawAmt);
+    if(rawAmt==="" || !isFinite(numAmt)){ toast("金额填写不合法，未保存",true); return; }
+    if(numAmt<0) toast("金额已按正数保存，收/支方向请用类型切换");
     r.date=$(".e-date",tr).value||r.date;
-    r.amount=Math.abs(parseFloat($(".e-amt",tr).value))||0;
+    r.amount=Math.round(Math.abs(numAmt)*100)/100;
     r.category=$(".e-cat",tr).value;
     r.merchant=$(".e-mer",tr).value.trim()||"未识别";
     r.type=$(".e-type",tr).value;
@@ -1155,7 +1342,7 @@
     var r=state.records.find(function(x){return x.id===id;}); if(!r) return;
     if(!confirm("删除这条记录？\n"+r.date+"  ¥"+fmtMoney(r.amount)+"  "+r.merchant)) return;
     state.records=state.records.filter(function(x){return x.id!==id;});
-    save(); cloudDelete(id); renderAll(); toast("已删除");
+    cloudDelete(id); save(); renderAll(); toast("已删除");
   }
   function addManual(){
     var rec={ id:uid(), date:todayStr(), amount:0, type:"expense", category:"other",
@@ -1385,12 +1572,13 @@
     function barLbl(p){
       var v=p.value;
       if(!v) return "";
-      if(Math.abs(v)>=10000) return (v/10000).toFixed(v%10000?1:0)+"w";
-      return Math.round(v);
+      var s=v<0?"-":"", a=Math.abs(v);
+      if(a>=10000) return s+(a/10000).toFixed(a%10000?1:0)+"w";
+      return s+Math.round(a);
     }
-    var hasSav = !!(savArr && savArr.some(function(v){ return v>0; }));
+    var hasSav = !!(savArr && savArr.some(function(v){ return v!==0; }));
     var many=labels.length>15;
-    var legendData = hasSav ? ["支出","收入","储蓄/投资"] : ["支出","收入"];
+    var legendData = hasSav ? ["支出","收入","储蓄/投资净额"] : ["支出","收入"];
     var packs={};
     ["exp","inc","sav"].forEach(function(k){
       packs[k]=((det&&det[k])||[]).map(function(list){ return topPack(list,10); });
@@ -1399,7 +1587,7 @@
     (expArr||[]).forEach(function(v){ sums.exp+=(v||0); });
     (incArr||[]).forEach(function(v){ sums.inc+=(v||0); });
     (savArr||[]).forEach(function(v){ sums.sav+=(v||0); });
-    var SER={"支出":{k:"exp",arr:expArr,c:"#c0392b"}, "收入":{k:"inc",arr:incArr,c:"#12855a"}, "储蓄/投资":{k:"sav",arr:savArr,c:"#2a6f7a"}};
+    var SER={"支出":{k:"exp",arr:expArr,c:"#c0392b"}, "收入":{k:"inc",arr:incArr,c:"#12855a"}, "储蓄/投资净额":{k:"sav",arr:savArr,c:"#2a6f7a"}};
     var series=[
       {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26,
         label:{show:true, position:"top", fontSize:9, color:"#c0392b", formatter:barLbl}},
@@ -1407,7 +1595,7 @@
         label:{show:true, position:"top", fontSize:9, color:"#12855a", formatter:barLbl}}
     ];
     if(hasSav){
-      series.push({name:"储蓄/投资", type:"bar", data:savArr, itemStyle:{color:"#499894", borderRadius:[4,4,0,0]}, barMaxWidth:26,
+      series.push({name:"储蓄/投资净额", type:"bar", data:savArr, itemStyle:{color:"#499894", borderRadius:[4,4,0,0]}, barMaxWidth:26,
         label:{show:true, position:"top", fontSize:9, color:"#2a6f7a", formatter:barLbl}});
     }
     return {
@@ -1425,7 +1613,7 @@
             if(nm===p.seriesName) return;
             var s=SER[nm], val=(s.arr&&s.arr[i])||0;
             if(!val) return;
-            if(nm==="储蓄/投资" && !hasSav) return;
+            if(nm==="储蓄/投资净额" && !hasSav) return;
             other.push('<span style="color:'+s.c+';">'+nm+' '+signedYuan(val)+'</span>');
           });
           if(other.length) head+='<div style="font-size:10.5px;color:#999;margin-top:1px;">同期 '+other.join(' · ')+'</div>';
@@ -1517,7 +1705,7 @@
         if(isRefund(r)) expByY[y]-=r.amount;   // 退款/群收款不计收入，改为冲减当年支出
         else { incByY[y]+=r.amount; detI[y].push(r); }
       }
-      else if(r.type==="transfer"){ if(r.category!=="sav_in"){ savByY[y]+=r.amount; detS[y].push(r); } }
+      else if(r.type==="transfer"){ savByY[y]+=(r.category==="sav_in"?-r.amount:r.amount); detS[y].push(r); }
       else { expByY[y]+=r.amount; detE[y].push(r); }
     });
     var expArr=years.map(function(y){return Math.round(expByY[y]*100)/100;});
@@ -1567,7 +1755,7 @@
         if(isRefund(r)) expByD[dd]-=r.amount;   // 退款/群收款不计收入，改为冲减当日支出
         else { incByD[dd]+=r.amount; detI[dd].push(r); }
       }
-      else if(r.type==="transfer"){ if(r.category!=="sav_in"){ savByD[dd]+=r.amount; detS[dd].push(r); } }
+      else if(r.type==="transfer"){ savByD[dd]+=(r.category==="sav_in"?-r.amount:r.amount); detS[dd].push(r); }
       else { expByD[dd]+=r.amount; detE[dd].push(r); }
     });
     labels.forEach(function(k){ expArr.push(Math.round(expByD[k]*100)/100); incArr.push(Math.round(incByD[k]*100)/100); savArr.push(Math.round(savByD[k]*100)/100); });
@@ -1608,7 +1796,7 @@
         if(isRefund(r)) expByM[mo]-=r.amount;   // 退款/群收款不计收入，改为冲减当月支出
         else { incByM[mo]+=r.amount; detI[mo].push(r); }
       }
-      else if(r.type==="transfer"){ if(r.category!=="sav_in"){ savByM[mo]+=r.amount; detS[mo].push(r); } }
+      else if(r.type==="transfer"){ savByM[mo]+=(r.category==="sav_in"?-r.amount:r.amount); detS[mo].push(r); }
       else { expByM[mo]+=r.amount; detE[mo].push(r); }
     });
     var detY={exp:[], inc:[], sav:[]};
@@ -2048,19 +2236,37 @@
       try{
         var p=JSON.parse(fr.result);
         var arr=Array.isArray(p)?p:(p.records||[]);
-        var sigs=existingSigs(); var n=0;
+        var byId={}; state.records.forEach(function(x){ byId[x.id]=x; });
+        var sigs=existingSigs();
+        var nAdd=0, nUpd=0, nSkip=0;
         arr.forEach(function(r){
           if(!r || !r.date || r.amount==null) return;
-          var sg=sigOf(r.date,r.amount);
-          if(sigs[sg]) return;
           var rtype=(r.type==="income"||r.type==="transfer")?r.type:"expense";
-          var rec={ id:r.id||uid(), date:r.date, amount:Number(r.amount)||0,
-                    type:rtype, category:CAT_BY_KEY[r.category]?r.category:classify((r.merchant||"")+" "+(r.category||""), rtype),
+          var amt=Math.round(Math.abs(Number(r.amount)||0)*100)/100;
+          var cat=CAT_BY_KEY[r.category]?r.category:classifyRec(r.merchant, r.note, r.raw, rtype);
+          // ① 有 id 就按 id 精确匹配：同一笔就更新，不再靠模糊签名猜
+          if(r.id && byId[r.id]){
+            var old=byId[r.id];
+            var inTs=Number(r.updatedAt||r.createdAt)||0, oldTs=Number(old.updatedAt||old.createdAt)||0;
+            if(inTs>oldTs){
+              old.date=r.date; old.amount=amt; old.type=rtype; old.category=cat;
+              old.merchant=r.merchant||old.merchant; old.source=r.source||old.source;
+              old.note=r.note||old.note; old.raw=r.raw||old.raw; old.updatedAt=inTs||Date.now();
+              cloudUpsert(old); nUpd++;
+            } else nSkip++;
+            return;
+          }
+          // ② 没 id 才退回签名判重（已含商户与方向，比单纯日期+金额安全得多）
+          var sg=sigOf(r.date,amt,r.merchant,rtype);
+          if(!r.id && sigs[sg]){ nSkip++; return; }
+          var rec={ id:r.id||uid(), date:r.date, amount:amt,
+                    type:rtype, category:cat,
                     merchant:r.merchant||"未识别", source:r.source||"导入", note:r.note||"", raw:r.raw||"",
-                    createdAt:r.createdAt||Date.now(), updatedAt:Date.now() };
-          state.records.push(rec); sigs[sg]=true; cloudUpsert(rec); n++;
+                    createdAt:r.createdAt||Date.now(), updatedAt:r.updatedAt||Date.now() };
+          state.records.push(rec); byId[rec.id]=rec; sigs[sg]=true; cloudUpsert(rec); nAdd++;
         });
-        save(); renderAll(); toast("导入完成，新增 "+n+" 条");
+        save(); renderAll();
+        toast("导入完成：新增 "+nAdd+" · 更新 "+nUpd+" · 跳过 "+nSkip);
       }catch(e){ toast("导入失败："+e.message,true); }
     };
     fr.readAsText(file);
@@ -2202,7 +2408,7 @@
       var i=+tr.getAttribute("data-i"); var r=reviewRows[i]; if(!r) return;
       syncReviewFromDOM();
       r.type=sel.value;
-      r.category=classify((r.merchant||"")+" "+(r.raw||""), r.type);
+      r.category=classifyRec(r.merchant, r.note, r.raw, r.type);
       renderReview();
     });
 
