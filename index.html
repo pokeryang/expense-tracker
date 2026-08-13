@@ -162,6 +162,7 @@
   .cm-row input.cm-kw{flex:1; min-width:80px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; font-size:12px; color:#556;}
   .cm-row .cm-del{border:1px solid #fbb; background:#fff5f5; color:#c53030; border-radius:8px; padding:5px 9px; font-size:12px; cursor:pointer; flex:0 0 auto;}
   .cm-row .cm-del:disabled{opacity:.4; cursor:not-allowed;}
+  .cm-row .cm-off{flex:0 0 auto; font-size:11px; color:#7b4ea8; background:#f3edfa; border:1px solid #e0d3f0; border-radius:999px; padding:3px 8px; white-space:nowrap; cursor:help;}
   .cm-add{border:1px dashed var(--line); background:#fafbfc; color:var(--brand-d); border-radius:8px; padding:6px 12px; font-size:12.5px; cursor:pointer;}
 </style>
 </head>
@@ -469,9 +470,11 @@
   var INC_CATS_DEFAULT = [
     {key:"inc_salary",   name:"薪酬",       color:"#59A14F", kw:["工资","薪资","薪酬","奖金","年终奖","绩效","提成","劳务","补贴","发薪","代发工资","津贴"]},
     {key:"inc_refund",   name:"返现/退税",   color:"#F28E2B", kw:["返现","返利","退税","赔付","现金奖励","消费奖励"]},
-    {key:"inc_refundback",name:"退款",       color:"#FF9DA7", kw:[]},
+    {key:"inc_refundback",name:"退款",       color:"#FF9DA7", kw:[], offset:1},
     {key:"inc_transfer", name:"转账/红包",  color:"#E15759", kw:["转账","红包","收款","转入","微信红包","亲属卡","收到","向你转账","给你转账","付款给你","转你","发给你"]},
-    {key:"inc_grouppay",name:"群收款",     color:"#B87AB6", kw:["群收款","AA收款","aa收款"]},
+    {key:"inc_grouppay",name:"群收款",     color:"#B87AB6", kw:["群收款","AA收款","aa收款"], offset:1},
+    // 收到房租＝合租室友补给我的那份房租，不是收入，而是把已付的房租找回来 → 定向冲减「住房」
+    {key:"inc_rentback",name:"收到房租",    color:"#D37295", kw:["房租","租金","收房租"], offset:1, offsetTo:"housing"},
     {key:"inc_invest",   name:"投资收入",   color:"#4E79A7", kw:["收益","利息","分红","股息","基金收益","理财收益","银行利息","盈利"]},
     {key:"provident_fund",name:"公积金",     color:"#2CA089", kw:[]},
     {key:"inc_other",    name:"其他收入",   color:"#B6992D", kw:[]}
@@ -481,20 +484,40 @@
     {key:"sav_out", name:"投资/储蓄", color:"#499894", kw:["买入","申购","定投","转入理财","投资理财","货币基金申购","银证转账","转出","定存","存入"]},
     {key:"sav_in",  name:"赎回/取回", color:"#8CD17D", kw:["赎回","本金赎回","取出","转回","银证转入","支取"]}
   ];
-  // 结构性分类：不可删除（删掉会破坏兜底/储蓄逻辑）
-  var PROTECTED_KEYS = { other:1, inc_other:1, sav_out:1, sav_in:1 };
+  // 结构性分类：不可删除（删掉会破坏兜底/储蓄/冲减口径）
+  var PROTECTED_KEYS = { other:1, inc_other:1, sav_out:1, sav_in:1,
+                         inc_refundback:1, inc_grouppay:1, inc_rentback:1 };
   var CAT_CFG_KEY = "expense-cat-config-v1";   // localStorage 离线兜底
   var CAT_CFG_ID  = "__cat_config__";          // 云端 expenses 表里的配置行 id
 
-  function cloneCats(arr){ return (arr||[]).map(function(c){ return {key:c.key, name:c.name, color:c.color, kw:(c.kw||[]).slice()}; }); }
+  function cloneCats(arr){ return (arr||[]).map(function(c){
+    var o = {key:c.key, name:c.name, color:c.color, kw:(c.kw||[]).slice()};
+    if(c.offset) o.offset=1;                 // 冲减类收入（退款/群收款/收到房租…）
+    if(c.offsetTo) o.offsetTo=c.offsetTo;    // 定向冲减到哪个支出类目
+    return o;
+  }); }
   // 可变工作副本：默认=内置，加载 catConfig 后被覆盖
   var EXP_CATS = cloneCats(EXP_CATS_DEFAULT);
   var INC_CATS = cloneCats(INC_CATS_DEFAULT);
   var TRA_CATS = cloneCats(TRA_CATS_DEFAULT);
   var ALL_CATS = [], CAT_BY_KEY = {}, catsVer = 0;
+  // ---- 冲减类收入：由类目配置派生（详见下文 refundStat 处的口径说明）----
+  // OFFSET_BUILTIN：内置冲减类目，老配置里没写 offset 标记也照旧按冲减处理，保证历史口径不漂移
+  // OFFSET_TARGET ：定向冲减目标（收到房租 → 住房），没有目标的走「原消费类目 + 等比摊分」
+  var OFFSET_BUILTIN = { inc_refundback:1, inc_grouppay:1, inc_rentback:1 };
+  var OFFSET_TO_BUILTIN = { inc_rentback:"housing" };
+  var OFFSET_CATS = {}, OFFSET_KEYS = [], OFFSET_TARGET = {};
   function rebuildCats(){
     ALL_CATS = EXP_CATS.concat(INC_CATS).concat(TRA_CATS);
     CAT_BY_KEY = {}; ALL_CATS.forEach(function(c){ CAT_BY_KEY[c.key]=c; });
+    OFFSET_CATS = {}; OFFSET_TARGET = {};
+    INC_CATS.forEach(function(c){
+      if(!(c.offset || OFFSET_BUILTIN[c.key])) return;
+      OFFSET_CATS[c.key] = c.name || c.key;
+      var to = c.offsetTo || OFFSET_TO_BUILTIN[c.key];
+      if(to) OFFSET_TARGET[c.key] = to;
+    });
+    OFFSET_KEYS = Object.keys(OFFSET_CATS);
     catsVer++;   // 类目配置一变，分类关键词表下次调用时重建
   }
   rebuildCats();
@@ -511,6 +534,23 @@
   function catName(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other||{name:"其他"}).name; }
   function catColor(k){ return (CAT_BY_KEY[k]||CAT_BY_KEY.other||{color:"#B6992D"}).color; }
 
+  // 老配置（云端/本地缓存）里不会有后来新增的内置冲减类目 → 补齐，避免这类记录掉进「其他收入」
+  function ensureBuiltinOffsetCats(){
+    var have={}; INC_CATS.forEach(function(c){ have[c.key]=c; });
+    INC_CATS_DEFAULT.forEach(function(d){
+      if(!OFFSET_BUILTIN[d.key]) return;
+      var cur=have[d.key];
+      if(!cur){
+        var insAt=INC_CATS.length;
+        for(var i=0;i<INC_CATS.length;i++){ if(INC_CATS[i].key==="inc_other"){ insAt=i; break; } }
+        INC_CATS.splice(insAt, 0, cloneCats([d])[0]);
+      }else{
+        // 已有则只补口径标记，保留用户改过的名称/颜色/关键词
+        cur.offset=1;
+        if(!cur.offsetTo && OFFSET_TO_BUILTIN[d.key]) cur.offsetTo=OFFSET_TO_BUILTIN[d.key];
+      }
+    });
+  }
   // 应用一份配置(可来自云端或本地)；缺某个流向则回退到内置默认
   function applyCatConfig(cfg){
     if(cfg && (cfg.expense||cfg.income||cfg.transfer)){
@@ -522,6 +562,7 @@
       INC_CATS = cloneCats(INC_CATS_DEFAULT);
       TRA_CATS = cloneCats(TRA_CATS_DEFAULT);
     }
+    ensureBuiltinOffsetCats();
     rebuildCats();
     _catLegendDone=false; // 让图例重绘
   }
@@ -664,6 +705,7 @@
       if(/申购|买入|定投|银证转账|定存|存入|转入理财/.test(s)) return "sav_out";
     }
     if(type==="income"){
+      if(/房租|租金|收房租/.test(m+s)) return "inc_rentback";   // 室友补的房租份额：走冲减，不算收入
       if(/代发工资|网上代发代扣|工资|薪资|奖金|年终奖|绩效/.test(s)) return "inc_salary";
       if(/公积金/.test(m+s)) return "provident_fund";
     }
@@ -1260,7 +1302,7 @@
     }
     var rfList=refundStat(rows);
     $("#listMeta").textContent=rows.length+" 笔 · 支出 ¥"+fmtInt(exp)+(inc?(" · 收入 ¥"+fmtInt(inc)):"")+(sav?(" · 储蓄/投资净额 ¥"+fmtInt(sav)):"")
-      +(rfList.n?(" · 含退款/群收款 ¥"+fmtInt(rfList.amt)+"（明细为原始金额，不冲减）"):"");
+      +(rfList.n?(" · 含"+offsetNames(rfList).join("/")+" ¥"+fmtInt(rfList.amt)+"（明细为原始金额，不冲减）"):"");
 
     if(!rows.length){
       body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
@@ -1400,14 +1442,14 @@
   var monthState={month:"", pieFlow:"expense"};
   var yearState ={year:"",  pieFlow:"expense"};
 
-  // ---------------- 冲减类收入口径（退款 + 群收款，3 张统计卡共用） ----------------
-  // 这两类进账都不是真实收入，而是把「已经记成支出的钱」找回来：
-  //   退款   —— 消费被商家退回；
-  //   群收款 —— 自己先垫付了整桌/整单，别人再把 AA 份子钱补给你。
+  // ---------------- 冲减类收入口径（退款 + 群收款 + 收到房租，3 张统计卡共用） ----------------
+  // 这几类进账都不是真实收入，而是把「已经记成支出的钱」找回来：
+  //   退款     —— 消费被商家退回；
+  //   群收款   —— 自己先垫付了整桌/整单，别人再把 AA 份子钱补给你；
+  //   收到房租 —— 整套房租由自己付掉，合租室友再把他那份补给你（定向冲减「住房」）。
   // 所以支出、收入两侧都扣掉本时段的这类进账，「收支盈余」与冲减前完全一致，
   // 只是两侧的绝对额都变成净额。
-  var OFFSET_CATS = {inc_refundback:"退款", inc_grouppay:"群收款"};
-  var OFFSET_KEYS = Object.keys(OFFSET_CATS);
+  // OFFSET_CATS / OFFSET_KEYS / OFFSET_TARGET 由 rebuildCats() 按当前类目配置派生（见上文）。
   function isRefund(r){ return !!(r && r.type==="income" && OFFSET_CATS[r.category]); }
   // 本时段冲减汇总：总额 / 笔数 / 按类目明细（分桶留给各卡按年、月、日自行冲减）
   function refundStat(recs){
@@ -1426,20 +1468,25 @@
     return a;
   }
   function signedYuan(v){ return (v<0?"−¥":"¥")+fmtInt(Math.abs(v)); }
-  // 卡片下方的口径备注：分别说明支出/收入各扣掉了多少退款、多少群收款
+  // 当前配置下所有冲减类目名（用于口径文案，不看本时段有没有）
+  function offsetAllNames(){ return OFFSET_KEYS.map(function(k){ return OFFSET_CATS[k]; }); }
+  // 卡片下方的口径备注：分别说明支出/收入各扣掉了多少退款、多少群收款、多少收到房租
   function refundNoteHTML(rf){
     if(!rf.n){
-      return '<div class="kpi kpi-note"><div class="l">口径：支出与收入均已减去本时段的退款与群收款，本时段无此类进账。</div></div>';
+      return '<div class="kpi kpi-note"><div class="l">口径：支出与收入均已减去本时段的'+esc(offsetAllNames().join('、'))+'，本时段无此类进账。</div></div>';
     }
-    var parts=[];
+    var parts=[], aimed=[];
     OFFSET_KEYS.forEach(function(k){
-      if(rf.by[k].n) parts.push(OFFSET_CATS[k]+' '+signedYuan(rf.by[k].amt)+'（'+rf.by[k].n+' 笔）');
+      if(!rf.by[k].n) return;
+      parts.push(OFFSET_CATS[k]+' '+signedYuan(rf.by[k].amt)+'（'+rf.by[k].n+' 笔）');
+      if(OFFSET_TARGET[k]) aimed.push(OFFSET_CATS[k]+'→'+catName(OFFSET_TARGET[k]));
     });
     var txt = '口径：支出已减去本时段的'+parts.join(' + ')
       + (parts.length>1 ? ('，合计 '+signedYuan(rf.amt)) : '')
-      + '；收入也减去同一金额（退款是消费退回、群收款是别人补的 AA 份子钱，两者都不算收入），故收支盈余不变；'
-      + '饼图优先按原消费类目定向冲减、归属不到的部分再等比摊分，柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。';
-    return '<div class="kpi kpi-note"><div class="l">'+txt+'</div></div>';
+      + '；收入也减去同一金额（退款是消费退回、群收款是别人补的 AA 份子钱、收到房租是室友补的房租份额，都不算收入），故收支盈余不变；'
+      + (aimed.length ? ('饼图里 '+aimed.join('、')+' 直接扣在该支出类目上，') : '饼图')
+      + '其余优先按原消费类目定向冲减、归属不到的部分再等比摊分，柱图同步冲减，「单笔支出 Top5」与下方明细仍为原始金额。';
+    return '<div class="kpi kpi-note"><div class="l">'+esc(txt)+'</div></div>';
   }
 
   function kpiHTML(recs){
@@ -1488,7 +1535,7 @@
       var attr={}, unattr=0;
       (recs||[]).forEach(function(r){
         if(!isRefund(r)) return;
-        var oc=r.origCategory;
+        var oc=r.origCategory || OFFSET_TARGET[r.category];   // 无归因时退回类目自带的定向目标（收到房租→住房）
         if(oc && byCat[oc]>0) attr[oc]=(attr[oc]||0)+(r.amount||0);
         else unattr+=(r.amount||0);
       });
@@ -1675,7 +1722,7 @@
       +'<div class="kpi"><div class="n" style="color:#c0392b">'+signedYuan(avgExp)+'</div><div class="l">月均支出</div></div>'
       +'<div class="kpi"><div class="n" style="color:#12855a">'+signedYuan(avgInc)+'</div><div class="l">月均收入</div></div>'
       +'<div class="kpi"><div class="n" style="color:'+netColor+'">'+(avgNet>=0?"+":"−")+'¥'+fmtInt(Math.abs(avgNet))+'</div><div class="l">月均结余</div></div>'
-      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已减去区间内退款与群收款合计 '+signedYuan(rfAvg.amt)+'）</div></div>';
+      +'<div class="kpi kpi-note"><div class="l">按所选区间覆盖 '+months+' 个月计算（总额 ÷ 月份数，储蓄/投资本金不计入，支出与收入均已减去区间内'+esc(offsetAllNames().join('、'))+'合计 '+signedYuan(rfAvg.amt)+'）</div></div>';
   }
   function renderTotal(){
     var months=monthsInRange();
@@ -2285,11 +2332,16 @@
 
   function catRowHTML(flow, c, idx){
     var prot=!!PROTECTED_KEYS[c.key];
+    var isOff = flow==="income" && (c.offset || OFFSET_BUILTIN[c.key]);
+    var offTo = isOff ? (c.offsetTo || OFFSET_TO_BUILTIN[c.key] || "") : "";
+    var offTip = "冲减类进账：不算收入，统计时从收入与支出两侧同时扣掉"
+      + (offTo ? ("，并直接扣在「"+catName(offTo)+"」支出上") : "，优先按原消费类目冲减");
     return '<div class="cm-row" data-flow="'+flow+'" data-idx="'+idx+'">'
       +'<input type="color" class="cm-color" value="'+esc(c.color||"#888888")+'">'
       +'<input type="text" class="cm-name" placeholder="名称" value="'+esc(c.name||"")+'">'
       +'<input type="text" class="cm-kw" placeholder="关键词，逗号分隔（可留空）" value="'+esc((c.kw||[]).join("，"))+'">'
-      +'<button class="cm-del" data-flow="'+flow+'" data-idx="'+idx+'"'+(prot?' disabled title="结构性分类，不可删除"':'')+'>删除</button>'
+      +(isOff?'<span class="cm-off" title="'+esc(offTip)+'">冲减'+(offTo?('·'+esc(catName(offTo))):'')+'</span>':'')
+      +'<button class="cm-del" data-flow="'+flow+'" data-idx="'+idx+'"'+(prot?(' disabled title="'+(isOff?'冲减类口径分类，不可删除':'结构性分类，不可删除')+'"'):'')+'>删除</button>'
     +'</div>';
   }
   function renderCatManager(){
