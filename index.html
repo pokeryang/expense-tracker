@@ -778,12 +778,13 @@
 
   // ---------------- cloud (Supabase) ----------------
   var SB=null, CLOUD_ON=false, LOGIN_MODE="init";
-  function setCloudStatus(s){
+  function setCloudStatus(s, prog){
     var el=$("#cloudStatus");
     var map={ local:["本地模式","#7a8194"], connecting:["连接云端…","#f59e0b"],
               synced:["已云同步","#10b981"], offline:["离线·待同步","#ef4444"], nocloud:["本地模式（未建表）","#7a8194"],
               locked:["未解锁","#7a8194"], badsecret:["密钥错误","#ef4444"] };
     var v=map[s]||map.local; var txt=v[0];
+    if(s==="connecting" && prog && prog.total>1) txt+=" "+Math.min(prog.done,prog.total)+"/"+prog.total;
     if((s==="offline"||s==="local") && state && state.pendingOps && state.pendingOps.length) txt+="（"+state.pendingOps.length+" 笔待上传）";
     el.textContent="● "+txt; el.style.color=v[1];
     var yl=$("#yearLoad"); if(yl) yl.style.display = (s==="connecting") ? "block" : "none";
@@ -874,10 +875,10 @@
         localStorage.removeItem(SECRET_STORE_KEY);
         showLoginModal("密钥不对，请重新输入"); renderAll(); return;
       }
-      // paged fetch: PostgREST caps a single response at 1000 rows,
-      // so keep walking Range windows until a short page is returned.
-      // 先加载最近的数据：按 ts 倒序取，第一页(最新1000条)到手即渲染，其余在后台续拉。
-      var PAGE=1000, offset=0, cloudById={}, aborted=false, firstDone=false;
+      // paged fetch: PostgREST caps a single response at 1000 rows.
+      // 首页(最新1000条)带 count=exact：到手即渲染，同时拿到总页数；
+      // 其余页用 6 路并发池拉取（串行 25 页约 66s → 并发约 14s）。
+      var PAGE=1000, CONC=6, cloudById={}, aborted=false, fetchedRows=0;
       function stampOf(r){ return Number(r && (r.updatedAt || r._srvTs || r.createdAt)) || 0; }
       function mergeCloudIntoState(){
         var merged={}, pend={}, tomb=state.tombstones||{};
@@ -893,49 +894,96 @@
           .filter(function(k){ return !tomb[k]; })              // 本地已删除的不复活
           .map(function(k){ return merged[k]; });
       }
-      function nextPage(){
-        SB.from(TABLE).select("*").order("ts",{ascending:false}).order("id",{ascending:false}).range(offset, offset+PAGE-1).then(function(res){
-          if(res.error){
-            console.warn("cloud fetch err",res.error);
-            CLOUD_ON=false; aborted=true;
-            setCloudStatus(/relation|does not exist|not find|schema cache/i.test(res.error.message||"")?"nocloud":"offline");
-            renderAll(); return;
-          }
-          var data=res.data||[];
-          data.forEach(function(row){
-            if(row.id===CAT_CFG_ID){
-              if(row.data && row.data.config){ applyCatConfig(row.data.config); saveCatConfigLocal(row.data.config); }
-              return;
-            }
-            var r=recFromRow(row); cloudById[r.id]=r;
-          });
-          // 最近的数据先显示：首页(最新)一到就合并渲染
-          if(!firstDone){ firstDone=true; mergeCloudIntoState(); renderAll(); }
-          if(data.length<PAGE){
-            // done — merge remaining and save
-            var localOnly=state.records.filter(function(r){ return !cloudById[r.id]; });
-            mergeCloudIntoState();
-            save(); renderAll(); setCloudStatus("synced");
-            // 分批上传本地独有记录, 避免 15k 并发请求把浏览器锁死
-            if(localOnly.length){
-              var _i=0, _batch=50;
-              (function pump(){
-                if(_i>=localOnly.length) return;
-                var end=Math.min(_i+_batch, localOnly.length);
-                for(var k=_i;k<end;k++){ cloudUpsert(localOnly[k]); }
-                _i=end;
-                setTimeout(pump, 150);
-              })();
-            }
-            flushOutbox();
+      function absorb(data){
+        fetchedRows+=data.length;
+        data.forEach(function(row){
+          if(row.id===CAT_CFG_ID){
+            if(row.data && row.data.config){ applyCatConfig(row.data.config); saveCatConfigLocal(row.data.config); }
             return;
           }
-          offset+=PAGE;
-          setCloudStatus("connecting");
-          nextPage();
+          var r=recFromRow(row); cloudById[r.id]=r;
         });
       }
-      nextPage();
+      function failCloud(err){
+        if(aborted) return;
+        console.warn("cloud fetch err",err);
+        CLOUD_ON=false; aborted=true;
+        setCloudStatus(/relation|does not exist|not find|schema cache/i.test((err&&err.message)||"")?"nocloud":"offline");
+        renderAll();
+      }
+      function finishCloud(){
+        if(aborted) return;
+        var localOnly=state.records.filter(function(r){ return !cloudById[r.id]; });
+        mergeCloudIntoState();
+        save(); renderAll(); setCloudStatus("synced");
+        // 分批上传本地独有记录, 避免 15k 并发请求把浏览器锁死
+        if(localOnly.length){
+          var _i=0, _batch=50;
+          (function pump(){
+            if(_i>=localOnly.length) return;
+            var end=Math.min(_i+_batch, localOnly.length);
+            for(var k=_i;k<end;k++){ cloudUpsert(localOnly[k]); }
+            _i=end;
+            setTimeout(pump, 150);
+          })();
+        }
+        flushOutbox();
+      }
+      function pageQuery(idx, withCount){
+        var q = withCount ? SB.from(TABLE).select("*",{count:"exact"}) : SB.from(TABLE).select("*");
+        return q.order("ts",{ascending:false}).order("id",{ascending:false}).range(idx*PAGE, idx*PAGE+PAGE-1);
+      }
+      function fetchPage(idx, cb){                              // cb(err, data) —— 单页失败自动重试一次
+        pageQuery(idx,false).then(function(res){
+          if(!res.error){ cb(null, res.data||[]); return; }
+          pageQuery(idx,false).then(function(r2){
+            if(r2.error) cb(r2.error); else cb(null, r2.data||[]);
+          });
+        });
+      }
+      function tailSweep(idx){                                  // 串行兜底：并发期间新增的行 / 没有 count 时
+        if(aborted) return;
+        fetchPage(idx, function(err,data){
+          if(aborted) return;
+          if(err){ failCloud(err); return; }
+          absorb(data);
+          if(data.length>=PAGE){ setCloudStatus("connecting"); tailSweep(idx+1); return; }
+          finishCloud();
+        });
+      }
+      function runPool(total){
+        var next=1, done=1, active=0;
+        setCloudStatus("connecting",{done:done,total:total});
+        function onDone(err,data){
+          active--;
+          if(aborted) return;
+          if(err){ failCloud(err); return; }
+          absorb(data); done++;
+          setCloudStatus("connecting",{done:done,total:total});
+          launch();
+        }
+        function launch(){
+          while(!aborted && active<CONC && next<total){
+            var idx=next++; active++;
+            fetchPage(idx, onDone);
+          }
+          if(!aborted && next>=total && active===0){
+            // 最后一个窗口拉满 → 期间可能又新增了行，串行补到底
+            if(fetchedRows>=total*PAGE) tailSweep(total); else finishCloud();
+          }
+        }
+        launch();
+      }
+      pageQuery(0,true).then(function(res){
+        if(res.error){ failCloud(res.error); return; }
+        var data=res.data||[];
+        absorb(data);
+        mergeCloudIntoState(); renderAll();                     // 最近的数据先显示
+        if(data.length<PAGE){ finishCloud(); return; }
+        var cnt=Number(res.count), total=Math.ceil(cnt/PAGE);
+        if(!isFinite(cnt) || !(total>1)){ setCloudStatus("connecting"); tailSweep(1); return; }
+        runPool(total);
+      });
     });
   }
 
