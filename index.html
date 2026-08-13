@@ -1997,21 +1997,30 @@
       trendState._cap=cap;
       // 下跌最多只能 −100%，负轴按真实最小值给，别跟着正轴的封顶值对称（否则半张图是空白）
       var yMin=cap ? (minG<0 ? -Math.ceil(Math.min(Math.abs(minG), cap)*1.15/10)*10 : 0) : null;
+      // 每根柱都标真实同比%（封顶只影响柱高，不影响标签数值）。柱多了横排会叠字，改竖排；
+      // 负增长的柱把标签放到柱子下方，竖排时用 align:right 让文字往下走。
+      var yoyDense=cats.length*yy.length>24;
+      function yoyLbl(neg){
+        return {position: neg?"bottom":"top",
+          rotate: yoyDense?90:0,
+          align: yoyDense?(neg?"right":"left"):"center",
+          verticalAlign: yoyDense?"middle":(neg?"top":"bottom"),
+          distance: yoyDense?4:2};
+      }
       var series=cats.map(function(c, ci){
         return {
           name:c.name, type:"bar", barMaxWidth:22, emphasis:{focus:"series"},
           itemStyle:{color:c.color, borderRadius:[3,3,0,0]},
-          labelLayout:{hideOverlap:true},          // 相邻柱都封顶时标签会叠成一团，重叠的直接藏掉（精确值看 tooltip）
-          label:{show:!!cap, position:"top", fontSize:9, color:"#7a8194",
+          label:{show:true, fontSize: yoyDense?8:9, color:"#7a8194",
             formatter:function(p){
               var r=p.data&&p.data.real;
-              if(r==null || Math.abs(r)<=cap) return "";     // 只给封顶的柱标真实值
+              if(r==null) return "";
               return (r>=0?"+":"−")+Math.abs(r).toFixed(0)+"%";
             }},
           data: growth[ci].map(function(g){
             if(g==null) return null;
-            if(!cap) return {value:g, real:g};
-            return {value:Math.max(-cap, Math.min(cap, g)), real:g};
+            var v = cap ? Math.max(-cap, Math.min(cap, g)) : g;
+            return {value:v, real:g, label:yoyLbl(g<0)};
           })
         };
       });
@@ -2032,7 +2041,7 @@
             return head+topDetailHTML(packOf(nm, y));
           }},
         legend:baseLegend,
-        grid:{left:8,right:12,top:34,bottom:8,containLabel:true},
+        grid:{left:8,right:12,top: yoyDense?54:34,bottom:8,containLabel:true},   // 竖排标签向上占位
         xAxis:{type:"category", data:yy, axisLabel:xLabel, axisTick:{show:false}},
         yAxis:{type:"value",                    // 不设 name：轴名画在 Y 轴顶端，会和顶部图例第一项叠在一起
           max:cap?Math.round(cap*1.15):null, min:yMin,
@@ -2043,7 +2052,9 @@
 
     // ---- 分组 / 堆叠 模式
     var stacked=(mode==="stack");
-    var showLbl=!stacked && years.length*cats.length<=24;
+    // 每根柱都要标金额。柱一多横排数字必然叠字，改竖排（rotate 90 + align:left/verticalAlign:middle
+    // 才是「从柱顶往上读」，居中对齐会甩到柱子旁边）。
+    var denseLbl=!stacked && years.length*cats.length>24;
     var series2=cats.map(function(c){
       var o={
         name:c.name, type:"bar", emphasis:{focus:"series"},
@@ -2052,9 +2063,13 @@
         data: years.map(function(y){ return (vals[c.key]&&vals[c.key][y])||0; })
       };
       if(stacked) o.stack="trend";
-      o.label = showLbl
-        ? {show:true, position:"top", fontSize:9, color:"#7a8194", formatter:function(p){ return p.value>0?shortMoney(p.value):""; }}
-        : {show:false};
+      o.label = stacked ? {show:false} : {
+        show:true, position:"top", fontSize: denseLbl?8:9, color:"#7a8194",
+        rotate: denseLbl?90:0,
+        align: denseLbl?"left":"center", verticalAlign: denseLbl?"middle":"bottom",
+        distance: denseLbl?4:2,
+        formatter:function(p){ return p.value>0?shortMoney(p.value):""; }
+      };
       return o;
     });
     if(stacked){
@@ -2097,7 +2112,7 @@
           return head+topDetailHTML(packOf(nm, y));
         }},
       legend:baseLegend,
-      grid:{left:8,right:12,top:34,bottom:8,containLabel:true},
+      grid:{left:8,right:12,top: denseLbl?54:34,bottom:8,containLabel:true},   // 竖排标签向上占位，给顶部留空免得压到图例
       xAxis:{type:"category", data:years, axisLabel:xLabel, axisTick:{show:false}},
       yAxis:{type:"value", axisLabel:{fontSize:11, formatter:function(v){ return Math.abs(v)>=10000?(v/10000).toFixed(v%10000?1:0)+"w":v; }},
         splitLine:{lineStyle:{color:"#eef0f4"}}},
@@ -2225,7 +2240,7 @@
     if(meta){
       var tip = mode==="stack" ? " · 柱顶数字为当年选中类目合计，悬停单根柱看该类目单笔 Top10"
               : mode==="yoy"   ? (" · 柱高为各类目当年相对上年的增幅"
-                                  +(trendState._cap?("，超 ±"+trendState._cap+"% 的柱已封顶并标真实值"):"")
+                                  +(trendState._cap?("，柱高超 ±"+trendState._cap+"% 已截断，柱顶标的仍是真实值"):"")
                                   +"，悬停单根柱看单笔 Top10")
               : " · 悬停单根柱查看金额、同比与单笔 Top10";
       meta.textContent = keys.length
