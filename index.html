@@ -442,6 +442,7 @@
   var SUPABASE_ANON_KEY = "sb_publishable_mlvyWH8gGyPjwvFgVbhRjA__HE3yrwr";
   var TABLE = "expenses";
   var STORE_KEY = "expense-records-v1";
+  var QUOTA_TIP_KEY = "expense-quota-tip-v1";   // 本地缓存超配额提示只弹一次
   var SECRET_STORE_KEY = "expense-app-secret";
 
   // ---------------- categories ----------------
@@ -770,10 +771,30 @@
     loadCatConfigLocal();
   }
   var dataRev=0;   // 数据版本号：任何一次落盘都自增，供列表缓存判失效
+  var localCacheFull=true, quotaNoticed=false;   // 记录数超过 localStorage 配额后只存待上传队列
+  function saveSlim(){
+    // 全量缓存存不下时的降级：至少保住离线待上传队列，刷新后不丢改动（记录本身云端有）
+    try{ localStorage.setItem(STORE_KEY, JSON.stringify({records:[], pendingOps:state.pendingOps||[]})); return true; }
+    catch(e){ try{ localStorage.removeItem(STORE_KEY); }catch(_){} return false; }
+  }
   function save(){
     dataRev++;
+    if(!localCacheFull){ saveSlim(); return; }
     try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-    catch(e){ toast("本地保存失败："+e.message,true); }
+    catch(e){
+      localCacheFull=false;                       // 别再每次都白白 stringify 8MB
+      saveSlim();
+      console.warn("local cache degraded:", e && e.message);
+      if(!quotaNoticed){
+        quotaNoticed=true;
+        // 这条提示每次加载都会触发，只在本浏览器上说一次就够了
+        var seen=false; try{ seen=!!localStorage.getItem(QUOTA_TIP_KEY); }catch(_){}
+        if(!seen){
+          try{ localStorage.setItem(QUOTA_TIP_KEY,"1"); }catch(_){}
+          toast("记录太多，浏览器本地缓存存不下，已改为只用云端（不影响使用）");
+        }
+      }
+    }
   }
 
   // ---------------- cloud (Supabase) ----------------
