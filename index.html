@@ -129,6 +129,14 @@
   .catbar{display:flex; gap:7px; flex-wrap:wrap; align-items:center; margin:-2px 0 12px; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--chip);}
   .catbar .cb-tools{display:flex; gap:6px; align-items:center; margin-right:4px;}
   .catbar .cb-lbl{font-size:12.5px; color:var(--sub); margin-right:2px;}
+  /* 明细批量操作条：勾选后出现 */
+  .bulkbar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:-2px 0 12px; padding:9px 12px; border:1px solid #cfe0ff; border-radius:10px; background:#f2f7ff;}
+  .bulkbar .bb-sum{font-size:13px; color:var(--ink); font-weight:600;}
+  .bulkbar .bb-sub{font-size:12px; color:var(--sub);}
+  .bulkbar .bb-sp{flex:1 1 auto;}
+  .bulkbar select.ctl{max-width:180px;}
+  .flist td .r-sel, .flist th #lChkAll{cursor:pointer; width:15px; height:15px;}
+  .flist td.center, .flist th.center{text-align:center;}
   .cchip{display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12.5px; cursor:pointer; user-select:none; border:1px solid transparent; background:#fff; color:#8a90a0; transition:all .12s;}
   .cchip .dot{width:8px; height:8px; border-radius:50%; opacity:.35;}
   .cchip.on{color:#fff; font-weight:600;}
@@ -254,7 +262,7 @@
         <div class="chart" id="pieTotal"></div>
       </div>
       <div>
-        <div class="muted" style="font-size:13px; margin-bottom:6px;">各年收入 vs 支出</div>
+        <div class="muted" style="font-size:13px; margin-bottom:6px;">各年收入 vs 支出 vs 盈余</div>
         <div class="chart" id="barTotal"></div>
       </div>
       <div>
@@ -370,9 +378,11 @@
       <button class="btn sm" id="btnAddManual">+ 手动添加</button>
     </div>
     <div class="catbar" id="catBar"></div>
+    <div class="bulkbar" id="bulkBar" style="display:none;"></div>
     <div style="overflow:auto;">
       <table class="flist">
         <thead><tr>
+          <th style="width:34px;" class="center"><input type="checkbox" id="lChkAll" title="勾选本页"></th>
           <th style="width:110px;">日期</th>
           <th style="width:110px;" class="right">金额</th>
           <th style="width:130px;">分类</th>
@@ -763,6 +773,8 @@
         state.pendingOps=Array.isArray(p.pendingOps)?p.pendingOps:[];
       }
     }catch(e){ console.warn("load failed",e); }
+    // 0 元记录一律不入库：云端已清空，本地缓存里的残留若留着会在 finishCloud 当作「本地独有」再传回云端复活
+    state.records=state.records.filter(function(r){ return Math.abs(Number(r&&r.amount)||0)>0; });
     // 迁移: 已废弃的"人情来往"合并到"转账/红包"
     var migrated=0;
     state.records.forEach(function(r){ if(r.category==="social"){ r.category="transfer"; migrated++; } });
@@ -922,6 +934,7 @@
             if(row.data && row.data.config){ applyCatConfig(row.data.config); saveCatConfigLocal(row.data.config); }
             return;
           }
+          if(!(Math.abs(Number(row.amount)||0)>0)) return;   // 0 元脏数据不进本地（别的设备回传的也挡掉）
           var r=recFromRow(row); cloudById[r.id]=r;
         });
       }
@@ -934,7 +947,7 @@
       }
       function finishCloud(){
         if(aborted) return;
-        var localOnly=state.records.filter(function(r){ return !cloudById[r.id]; });
+        var localOnly=state.records.filter(function(r){ return !cloudById[r.id] && Math.abs(Number(r.amount)||0)>0; });
         mergeCloudIntoState();
         save(); renderAll(); setCloudStatus("synced");
         // 分批上传本地独有记录, 避免 15k 并发请求把浏览器锁死
@@ -1374,8 +1387,9 @@
       +(rfList.n?(" · 含"+offsetNames(rfList).join("/")+" ¥"+fmtInt(rfList.amt)+"（明细为原始金额，不冲减）"):"");
 
     if(!rows.length){
-      body.innerHTML='<tr><td colspan="6"><div class="empty">没有匹配的记录。</div></td></tr>';
+      body.innerHTML='<tr><td colspan="7"><div class="empty">没有匹配的记录。</div></td></tr>';
       var pg0=$("#listPager"); if(pg0) pg0.innerHTML="";
+      renderBulkBar(); syncChkAll([]);
       return;
     }
 
@@ -1396,6 +1410,7 @@
       if(isTra){ amtCls="tra"; sign=(r.category==="sav_in")?"←":"→"; }
       else { var showInc=isInc||neg; amtCls=showInc?"inc":"exp"; sign=showInc?"+":"-"; }
       html[j]='<tr data-id="'+r.id+'">'
+        +'<td class="center"><input type="checkbox" class="r-sel"'+(selIds.has(r.id)?' checked':'')+'></td>'
         +'<td>'+esc(r.date)+'</td>'
         +'<td class="right amount '+amtCls+'">'+sign+"¥"+fmtMoney(Math.abs(r.amount))+'</td>'
         +'<td><span class="tag" style="background:'+catColor(r.category)+'22;color:'+catColor(r.category)+'">'+esc(catName(r.category))+'</span></td>'
@@ -1405,6 +1420,7 @@
         +'</tr>';
     }
     body.innerHTML=html.join("");
+    renderBulkBar(); syncChkAll(slice);
 
     // pager
     var pg=$("#listPager"); if(!pg) return;
@@ -1421,11 +1437,129 @@
       +'</select>';
   }
 
+  // ---------------- 明细批量操作（勾选 → 批量删除 / 批量改分类） ----------------
+  var selIds=new Set();
+  var _selAnchor="";                 // Shift 连选锚点：上一次手动勾选的行 id
+  function recById(id){ return state.records.find(function(x){return x.id===id;}); }
+  // 选中集合里可能残留已被删/已被筛没的 id，用之前先对齐真实记录
+  function selRecords(){
+    var out=[];
+    Array.from(selIds).forEach(function(id){ var r=recById(id); if(r) out.push(id); else selIds.delete(id); });
+    return out.map(recById);
+  }
+  function syncChkAll(pageRows){
+    var el=$("#lChkAll"); if(!el) return;
+    var rows=pageRows||[];
+    var on=rows.length>0 && rows.every(function(r){ return selIds.has(r.id); });
+    var some=rows.some(function(r){ return selIds.has(r.id); });
+    el.checked=on; el.indeterminate=(!on && some);
+  }
+  function bulkCatOptions(){
+    function grp(label, arr){
+      return '<optgroup label="'+label+'">'+arr.map(function(c){
+        return '<option value="'+c.key+'">'+esc(c.name)+'</option>';
+      }).join("")+'</optgroup>';
+    }
+    return '<option value="">改为分类…</option>'+grp("支出",EXP_CATS)+grp("收入",INC_CATS)+grp("储蓄/投资",TRA_CATS);
+  }
+  function renderBulkBar(){
+    var bar=$("#bulkBar"); if(!bar) return;
+    var recs=selRecords();
+    if(!recs.length){ bar.style.display="none"; bar.innerHTML=""; return; }
+    var exp=0, inc=0, tra=0, dmin="", dmax="";
+    recs.forEach(function(r){
+      if(r.type==="income") inc+=r.amount;
+      else if(r.type==="transfer") tra+=r.amount;
+      else exp+=r.amount;
+      var d=r.date||""; if(d){ if(!dmin||d<dmin) dmin=d; if(!dmax||d>dmax) dmax=d; }
+    });
+    var parts=[];
+    if(exp) parts.push('支出 ¥'+fmtInt(exp));
+    if(inc) parts.push('收入 ¥'+fmtInt(inc));
+    if(tra) parts.push('储蓄/投资 ¥'+fmtInt(tra));
+    var rowsNow=(listState._rows||[]).length;
+    bar.style.display="flex";
+    bar.innerHTML=''
+      +'<span class="bb-sum">已选 '+recs.length+' 笔</span>'
+      +'<span class="bb-sub">'+(parts.join(' · ')||'—')+(dmin?('　'+dmin+' ~ '+dmax):'')+'</span>'
+      +'<button class="btn sm ghost" data-bb="page">选中本页</button>'
+      +'<button class="btn sm ghost" data-bb="all">选中全部筛选结果（'+rowsNow+'）</button>'
+      +'<button class="btn sm ghost" data-bb="none">清空选择</button>'
+      +'<span class="bb-sub">（Shift 可连选一段）</span>'
+      +'<span class="bb-sp"></span>'
+      +'<select class="ctl" id="bulkCat">'+bulkCatOptions()+'</select>'
+      +'<button class="btn sm" data-bb="apply">应用分类</button>'
+      +'<button class="btn sm danger" data-bb="del">批量删除</button>';
+  }
+  // 云端批量删除：DELETE ... in(ids)，每批 60 串行；失败的落待上传队列，不丢
+  function cloudDeleteMany(ids, done){
+    if(!CLOUD_ON || !SB){ ids.forEach(function(id){ queueOp({op:"delete",id:id}); }); if(done) done(0); return; }
+    var i=0, B=60, fail=0;
+    (function step(){
+      if(i>=ids.length){ setCloudStatus(fail?"offline":"synced"); if(done) done(fail); return; }
+      var chunk=ids.slice(i,i+B); i+=B;
+      SB.from(TABLE).delete().in("id",chunk).then(function(res){
+        if(res.error){ fail+=chunk.length; chunk.forEach(function(id){ queueOp({op:"delete",id:id}); }); }
+        if(ids.length>B) toast("云端删除中… "+Math.min(i,ids.length)+"/"+ids.length);
+        step();
+      });
+    })();
+  }
+  // 云端批量 upsert：整行覆盖（顶层 category 是权威列，data 里也同步改过）
+  function cloudUpsertMany(recs, done){
+    if(!CLOUD_ON || !SB){ recs.forEach(function(r){ queueOp({op:"upsert",id:r.id}); }); if(done) done(0); return; }
+    var i=0, B=60, fail=0;
+    (function step(){
+      if(i>=recs.length){ setCloudStatus(fail?"offline":"synced"); if(done) done(fail); return; }
+      var chunk=recs.slice(i,i+B); i+=B;
+      SB.from(TABLE).upsert(chunk.map(rowFromRec)).then(function(res){
+        if(res.error){ fail+=chunk.length; chunk.forEach(function(r){ queueOp({op:"upsert",id:r.id}); }); }
+        if(recs.length>B) toast("云端写入中… "+Math.min(i,recs.length)+"/"+recs.length);
+        step();
+      });
+    })();
+  }
+  function bulkDelete(){
+    var recs=selRecords();
+    if(!recs.length){ toast("没有勾选记录",true); return; }
+    var sum=0; recs.forEach(function(r){ sum+=Math.abs(Number(r.amount)||0); });
+    var preview=recs.slice(0,5).map(function(r){
+      return "· "+r.date+"  ¥"+fmtMoney(Math.abs(r.amount))+"  "+(r.merchant||catName(r.category));
+    }).join("\n");
+    if(!confirm("删除选中的 "+recs.length+" 笔记录？金额合计 ¥"+fmtMoney(sum)+"\n\n"+preview
+      +(recs.length>5?("\n…（其余 "+(recs.length-5)+" 笔）"):"")+"\n\n删除后云端同步移除，不可撤销。")) return;
+    var ids=recs.map(function(r){ return r.id; });
+    var kill={}; ids.forEach(function(id){ kill[id]=1; addTomb(id); });   // 墓碑：别的设备回传时不复活
+    state.records=state.records.filter(function(r){ return !kill[r.id]; });
+    selIds.clear();
+    save(); renderAll();
+    cloudDeleteMany(ids, function(fail){
+      toast(fail?("已删除 "+ids.length+" 笔，其中 "+fail+" 笔待联网重试"):("已删除 "+ids.length+" 笔"), !!fail);
+    });
+  }
+  function bulkSetCategory(key){
+    if(!key){ toast("先选一个目标分类",true); return; }
+    var recs=selRecords();
+    if(!recs.length){ toast("没有勾选记录",true); return; }
+    var flow=flowOfCat(key);
+    var flowName={expense:"支出",income:"收入",transfer:"储蓄/投资"}[flow];
+    var moved=recs.filter(function(r){ return (r.type||"expense")!==flow; }).length;
+    if(!confirm("把选中的 "+recs.length+" 笔改为「"+catName(key)+"」？"
+      +(moved?("\n其中 "+moved+" 笔的收支方向会一并改成「"+flowName+"」。"):""))) return;
+    var now=Date.now();
+    recs.forEach(function(r){ r.category=key; r.type=flow; r.updatedAt=now; });
+    save(); renderAll();
+    cloudUpsertMany(recs, function(fail){
+      toast(fail?("已改 "+recs.length+" 笔，其中 "+fail+" 笔待联网重试"):("已改分类 "+recs.length+" 笔 → "+catName(key)), !!fail);
+    });
+  }
+
   function editRecord(id){
     var r=state.records.find(function(x){return x.id===id;}); if(!r) return;
     var tr=$('#listBody tr[data-id="'+id+'"]'); if(!tr) return;
     var catOpts=catsFor(r.type).map(function(c){return '<option value="'+c.key+'"'+(c.key===r.category?" selected":"")+'>'+c.name+'</option>';}).join("");
-    tr.innerHTML='<td><input type="date" value="'+esc(r.date)+'" class="e-date"></td>'
+    tr.innerHTML='<td class="center"><input type="checkbox" class="r-sel"'+(selIds.has(id)?' checked':'')+'></td>'
+      +'<td><input type="date" value="'+esc(r.date)+'" class="e-date"></td>'
       +'<td class="right"><input type="number" min="0" step="0.01" inputmode="decimal" class="amt e-amt" value="'+Math.abs(r.amount)+'" style="width:80px;" oninput="this.value=this.value.replace(/-/g,\'\')"></td>'
       +'<td><select class="e-cat">'+catOpts+'</select></td>'
       +'<td><input class="e-mer" value="'+esc(r.merchant)+'"> <select class="e-type" style="width:84px;"><option value="expense"'+(r.type!=="income"&&r.type!=="transfer"?" selected":"")+'>支出</option><option value="income"'+(r.type==="income"?" selected":"")+'>收入</option><option value="transfer"'+(r.type==="transfer"?" selected":"")+'>储蓄/投资</option></select><input class="e-note" value="'+esc(r.note||"")+'" placeholder="备注（可选）" style="margin-top:5px;"></td>'
@@ -1438,6 +1572,7 @@
     var tr=$('#listBody tr[data-id="'+id+'"]'); if(!tr) return;
     var rawAmt=$(".e-amt",tr).value, numAmt=parseFloat(rawAmt);
     if(rawAmt==="" || !isFinite(numAmt)){ toast("金额填写不合法，未保存",true); return; }
+    if(Math.abs(numAmt)===0){ toast("金额不能为 0，未保存",true); return; }
     if(numAmt<0) toast("金额已按正数保存，收/支方向请用类型切换");
     r.date=$(".e-date",tr).value||r.date;
     r.amount=Math.round(Math.abs(numAmt)*100)/100;
@@ -1453,6 +1588,7 @@
     var r=state.records.find(function(x){return x.id===id;}); if(!r) return;
     if(!confirm("删除这条记录？\n"+r.date+"  ¥"+fmtMoney(r.amount)+"  "+r.merchant)) return;
     state.records=state.records.filter(function(x){return x.id!==id;});
+    selIds.delete(id);
     cloudDelete(id); save(); renderAll(); toast("已删除");
   }
   function addManual(){
@@ -1684,7 +1820,7 @@
 
   // det（可选）：{exp:[[记录…]…], inc:[…], sav:[…]}，与 labels 等长，用于 hover 时展开该柱的单笔 Top10。
   // 注意柱高是冲减后的净额（退款/群收款已从支出里扣掉），而明细列的是原始单笔金额，与饼图口径一致。
-  function twoBarOption(labels, expArr, incArr, savArr, det){
+  function twoBarOption(labels, expArr, incArr, savArr, det, netArr, elId){
     function barLbl(p){
       var v=p.value;
       if(!v) return "";
@@ -1693,17 +1829,29 @@
       return s+Math.round(a);
     }
     var hasSav = !!(savArr && savArr.some(function(v){ return v!==0; }));
+    var hasNet = !!(netArr && netArr.some(function(v){ return v!==0; }));
     var many=labels.length>15;
     var legendData = hasSav ? ["支出","收入","储蓄/投资净额"] : ["支出","收入"];
+    if(hasNet) legendData=legendData.concat(["收支盈余"]);
+    // 图例项变多后在窄卡片里会换行，若 grid.top 不跟着抬高，第二行图例会压在绘图区上
+    var _cw=0;
+    try{ var _el=elId&&document.getElementById(elId); if(_el) _cw=_el.clientWidth||0; }catch(e){}
+    if(!_cw) _cw=320;
+    var _estW=0;
+    legendData.forEach(function(n){ _estW += n.length*12 + 34; });   // 文字 + 图标 + 间距（宁可高估：换行压住绘图区更难看）
+    var legRows=Math.max(1, Math.min(3, Math.ceil(_estW/Math.max(140,_cw-18))));
+    var gridTop=12+legRows*18;
     var packs={};
     ["exp","inc","sav"].forEach(function(k){
       packs[k]=((det&&det[k])||[]).map(function(list){ return topPack(list,10); });
     });
-    var sums={exp:0, inc:0, sav:0};
+    var sums={exp:0, inc:0, sav:0, net:0};
     (expArr||[]).forEach(function(v){ sums.exp+=(v||0); });
     (incArr||[]).forEach(function(v){ sums.inc+=(v||0); });
     (savArr||[]).forEach(function(v){ sums.sav+=(v||0); });
+    (netArr||[]).forEach(function(v){ sums.net+=(v||0); });
     var SER={"支出":{k:"exp",arr:expArr,c:"#c0392b"}, "收入":{k:"inc",arr:incArr,c:"#12855a"}, "储蓄/投资净额":{k:"sav",arr:savArr,c:"#2a6f7a"}};
+    if(hasNet) SER["收支盈余"]={k:"net", arr:netArr, c:"#8250c4"};
     var series=[
       {name:"支出", type:"bar", data:expArr, itemStyle:{color:"#c0392b", borderRadius:[4,4,0,0]}, barMaxWidth:26,
         label:{show:true, position:"top", fontSize:9, color:"#c0392b", formatter:barLbl}},
@@ -1714,15 +1862,30 @@
       series.push({name:"储蓄/投资净额", type:"bar", data:savArr, itemStyle:{color:"#499894", borderRadius:[4,4,0,0]}, barMaxWidth:26,
         label:{show:true, position:"top", fontSize:9, color:"#2a6f7a", formatter:barLbl}});
     }
+    if(hasNet){
+      series.push({name:"收支盈余", type:"line", data:netArr, symbol:"circle", symbolSize:6, z:5,
+        itemStyle:{color:"#8250c4"}, lineStyle:{color:"#8250c4", width:2},
+        label:{show:true, position:"bottom", distance:5, fontSize:9, color:"#8250c4", formatter:barLbl,
+          backgroundColor:"rgba(255,255,255,.86)", padding:[1,2,1,2], borderRadius:2},
+        labelLayout:{hideOverlap:true},
+        markLine:{silent:true, symbol:"none", label:{show:false},
+          lineStyle:{color:"#c9c2e6", type:"dashed", width:1}, data:[{yAxis:0}]}});
+    }
     return {
       tooltip:{trigger:"item", confine:true, extraCssText:"max-width:300px;",
         formatter:function(p){
           var cur=SER[p.seriesName]; if(!cur) return "";
           var i=p.dataIndex, v=Number(p.value)||0, tot=sums[cur.k];
+          var isNet=(cur.k==="net");
+          var rate="";
+          if(isNet){
+            var incHere=(incArr&&incArr[i])||0;
+            if(incHere>0) rate='<span style="color:#999;font-size:11px;"> · 结余率 '+(v/incHere*100).toFixed(1)+'%</span>';
+          }else if(tot>0){
+            rate='<span style="color:#999;font-size:11px;"> · 占本图'+esc(p.seriesName)+' '+(v/tot*100).toFixed(1)+'%</span>';
+          }
           var head='<div style="font-weight:600;">'+esc(p.name)+' · '+esc(p.seriesName)+'</div>'
-            +'<div><span style="color:'+cur.c+';font-weight:600;">'+signedYuan(v)+'</span>'
-            +(tot>0?('<span style="color:#999;font-size:11px;"> · 占本图'+esc(p.seriesName)+' '+(v/tot*100).toFixed(1)+'%</span>'):'')
-            +'</div>';
+            +'<div><span style="color:'+cur.c+';font-weight:600;">'+signedYuan(v)+'</span>'+rate+'</div>';
           // 同一柱组的其余系列也带出来，免得改成单柱触发后看不到当期对照
           var other=[];
           Object.keys(SER).forEach(function(nm){
@@ -1733,10 +1896,10 @@
             other.push('<span style="color:'+s.c+';">'+nm+' '+signedYuan(val)+'</span>');
           });
           if(other.length) head+='<div style="font-size:10.5px;color:#999;margin-top:1px;">同期 '+other.join(' · ')+'</div>';
-          return head+topDetailHTML(packs[cur.k] && packs[cur.k][i]);
+          return isNet ? head : (head+topDetailHTML(packs[cur.k] && packs[cur.k][i]));
         }},
-      legend:{data:legendData, top:0, textStyle:{fontSize:11}},
-      grid:{left:8,right:12,top:30,bottom:46,containLabel:true},
+      legend:{data:legendData, top:0, itemWidth:14, itemHeight:8, itemGap:9, textStyle:{fontSize:11}},
+      grid:{left:8,right:12,top:gridTop,bottom:46,containLabel:true},
       dataZoom:[
         {type:"inside", start: many?60:0, end:100, zoomOnMouseWheel:true, moveOnMouseMove:true},
         {type:"slider", height:16, bottom:8, start: many?60:0, end:100, brushSelect:false,
@@ -1827,8 +1990,10 @@
     var expArr=years.map(function(y){return Math.round(expByY[y]*100)/100;});
     var incArr=years.map(function(y){return Math.round(incByY[y]*100)/100;});
     var savArr=years.map(function(y){return Math.round(savByY[y]*100)/100;});
+    // 各年收支盈余 = 当年收入 − 当年支出（与 KPI「收支盈余」同口径：退款/群收款已冲减支出且不计收入，本金进出不参与）
+    var netArr=years.map(function(y,i){ return Math.round((incArr[i]-expArr[i])*100)/100; });
     var det={exp:years.map(function(y){return detE[y];}), inc:years.map(function(y){return detI[y];}), sav:years.map(function(y){return detS[y];})};
-    ec("barTotal").setOption(twoBarOption(years, expArr, incArr, savArr, det), true);
+    ec("barTotal").setOption(twoBarOption(years, expArr, incArr, savArr, det, netArr, "barTotal"), true);
   }
 
   // ---- 月度
@@ -1876,7 +2041,7 @@
     });
     labels.forEach(function(k){ expArr.push(Math.round(expByD[k]*100)/100); incArr.push(Math.round(incByD[k]*100)/100); savArr.push(Math.round(savByD[k]*100)/100); });
     var detM={exp:labels.map(function(k){return detE[k];}), inc:labels.map(function(k){return detI[k];}), sav:labels.map(function(k){return detS[k];})};
-    ec("barMonth").setOption(twoBarOption(labels, expArr, incArr, savArr, detM), true);
+    ec("barMonth").setOption(twoBarOption(labels, expArr, incArr, savArr, detM, null, "barMonth"), true);
   }
 
   // ---- 年度
@@ -1920,7 +2085,7 @@
       expArr.push(Math.round(expByM[k]*100)/100); incArr.push(Math.round(incByM[k]*100)/100); savArr.push(Math.round(savByM[k]*100)/100);
       detY.exp.push(detE[k]); detY.inc.push(detI[k]); detY.sav.push(detS[k]);
     }
-    ec("barYear").setOption(twoBarOption(labels, expArr, incArr, savArr, detY), true);
+    ec("barYear").setOption(twoBarOption(labels, expArr, incArr, savArr, detY, null, "barYear"), true);
   }
 
   // ---- 分类年度趋势
@@ -2374,6 +2539,7 @@
           if(!r || !r.date || r.amount==null) return;
           var rtype=(r.type==="income"||r.type==="transfer")?r.type:"expense";
           var amt=Math.round(Math.abs(Number(r.amount)||0)*100)/100;
+          if(!(amt>0)){ nSkip++; return; }              // 0 元记录不导入
           var cat=CAT_BY_KEY[r.category]?r.category:classifyRec(r.merchant, r.note, r.raw, rtype);
           // ① 有 id 就按 id 精确匹配：同一笔就更新，不再靠模糊签名猜
           if(r.id && byId[r.id]){
@@ -2679,7 +2845,59 @@
       }
     });
 
+    // 批量操作条
+    var bulkBar=$("#bulkBar");
+    if(bulkBar) bulkBar.addEventListener("click",function(e){
+      var b=e.target.closest("button[data-bb]"); if(!b) return;
+      var act=b.getAttribute("data-bb");
+      if(act==="page"){
+        var pageSize=listState.pageSize, start=(listState.page-1)*pageSize;
+        (listState._rows||[]).slice(start,start+pageSize).forEach(function(r){ selIds.add(r.id); });
+        renderList(); return;
+      }
+      if(act==="all"){ (listState._rows||[]).forEach(function(r){ selIds.add(r.id); }); renderList(); return; }
+      if(act==="none"){ selIds.clear(); renderList(); return; }
+      if(act==="apply"){ var sel=$("#bulkCat"); bulkSetCategory(sel?sel.value:""); return; }
+      if(act==="del"){ bulkDelete(); return; }
+    });
+    var chkAll=$("#lChkAll");
+    if(chkAll) chkAll.addEventListener("change",function(){
+      var on=chkAll.checked;
+      var pageSize=listState.pageSize, start=(listState.page-1)*pageSize;
+      (listState._rows||[]).slice(start,start+pageSize).forEach(function(r){
+        if(on) selIds.add(r.id); else selIds.delete(r.id);
+      });
+      renderList();
+    });
+    // 行内勾选：只更新批量条，不重渲染列表（否则连续勾选会被打断）
+    $("#listBody").addEventListener("change",function(e){
+      var cb=e.target.closest(".r-sel"); if(!cb) return;
+      var tr=e.target.closest("tr[data-id]"); if(!tr) return;
+      var id=tr.getAttribute("data-id");
+      if(cb.checked) selIds.add(id); else selIds.delete(id);
+      _selAnchor=id;
+      var pageSize=listState.pageSize, start=(listState.page-1)*pageSize;
+      renderBulkBar(); syncChkAll((listState._rows||[]).slice(start,start+pageSize));
+    });
+
     $("#listBody").addEventListener("click",function(e){
+      var cbx=e.target.closest(".r-sel");
+      if(cbx){
+        // Shift 连选：锚点 → 当前行整段按当前勾选状态处理
+        var trc=e.target.closest("tr[data-id]");
+        if(trc && e.shiftKey && _selAnchor){
+          var pageSize2=listState.pageSize, start2=(listState.page-1)*pageSize2;
+          var pageRows=(listState._rows||[]).slice(start2,start2+pageSize2);
+          var ids=pageRows.map(function(r){ return r.id; });
+          var a=ids.indexOf(_selAnchor), b=ids.indexOf(trc.getAttribute("data-id"));
+          if(a>=0 && b>=0 && a!==b){
+            var lo=Math.min(a,b), hi=Math.max(a,b), on=cbx.checked;
+            for(var q=lo;q<=hi;q++){ if(on) selIds.add(ids[q]); else selIds.delete(ids[q]); }
+            renderList();
+          }
+        }
+        return;
+      }
       var tr=e.target.closest("tr[data-id]"); if(!tr) return; var id=tr.getAttribute("data-id");
       if(e.target.closest(".act-edit")) editRecord(id);
       else if(e.target.closest(".act-del")) delRecord(id);
