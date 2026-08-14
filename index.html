@@ -84,6 +84,11 @@
   .seg{display:inline-flex; border:1px solid var(--line); border-radius:9px; overflow:hidden;}
   .seg button{border:0; background:#fff; padding:6px 12px; font-size:13px; cursor:pointer; color:var(--sub);}
   .seg button.on{background:var(--brand); color:#fff;}
+  .seg button .sarr{font-size:11px; margin-left:3px; opacity:.9;}
+  .flist th.sortable{cursor:pointer; user-select:none; -webkit-user-select:none;}
+  .flist th.sortable:hover{color:var(--brand);}
+  .flist th.sortable.on{color:var(--brand);}
+  .flist th.sortable .sarr{font-size:11px; margin-left:2px;}
   .stat-row{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-bottom:14px;}
   .stat-row > .card{margin:0;}
   .stat-grid{display:grid; grid-template-columns:1fr; gap:12px;}
@@ -373,6 +378,11 @@
       <span class="muted" style="font-size:13px;">~</span>
       <input class="ctl" id="fAmtMax" type="number" inputmode="decimal" min="0" step="0.01" placeholder="最大" style="width:82px;">
       <input class="ctl grow" id="fKw" placeholder="搜索商户 / 说明…" style="min-width:140px;">
+      <span class="muted" style="font-size:13px;">排序</span>
+      <div class="seg list-sort" id="listSort">
+        <button data-k="date" class="on" title="按时间排序，再点一次切换升/降序">时间</button>
+        <button data-k="amount" title="按金额排序，再点一次切换升/降序">金额</button>
+      </div>
       <span class="muted" id="listMeta"></span>
       <span class="top-sp"></span>
       <button class="btn sm" id="btnAddManual">+ 手动添加</button>
@@ -383,8 +393,8 @@
       <table class="flist">
         <thead><tr>
           <th style="width:34px;" class="center"><input type="checkbox" id="lChkAll" title="勾选本页"></th>
-          <th style="width:110px;">日期</th>
-          <th style="width:110px;" class="right">金额</th>
+          <th style="width:110px;" class="sortable" data-k="date">日期<span class="sarr"></span></th>
+          <th style="width:110px;" class="right sortable" data-k="amount">金额<span class="sarr"></span></th>
           <th style="width:130px;">分类</th>
           <th>商户 / 说明</th>
           <th style="width:70px;">来源</th>
@@ -1330,6 +1340,58 @@
     fm.value=(ms.indexOf(curM)>=0)?curM:"";
   }
 
+  // ---------------- 明细排序（时间 / 金额，可切换升降） ----------------
+  var LIST_SORT_LS = "expense-list-sort-v1";
+  var listSort = { key:"date", dir:-1 };   // dir: -1 降序（大→小 / 新→旧），1 升序
+  (function restoreListSort(){
+    try{
+      var raw=localStorage.getItem(LIST_SORT_LS); if(!raw) return;
+      var o=JSON.parse(raw);
+      if(o && (o.key==="date"||o.key==="amount")) listSort.key=o.key;
+      if(o && (o.dir===1||o.dir===-1)) listSort.dir=o.dir;
+    }catch(e){}
+  })();
+  function saveListSort(){ try{ localStorage.setItem(LIST_SORT_LS, JSON.stringify(listSort)); }catch(e){} }
+  function listSorter(){
+    var d=listSort.dir;
+    if(listSort.key==="amount"){
+      return function(a,b){
+        var x=Math.abs(Number(a.amount)||0), y=Math.abs(Number(b.amount)||0);
+        if(x!==y) return (x-y)*d;
+        return (b.date||"").localeCompare(a.date||"") || (b.createdAt||0)-(a.createdAt||0);
+      };
+    }
+    return function(a,b){
+      return (a.date||"").localeCompare(b.date||"")*d || ((a.createdAt||0)-(b.createdAt||0))*d;
+    };
+  }
+
+  function renderSortUI(){
+    var arrow = listSort.dir<0 ? "↓" : "↑";
+    var segBtns=document.querySelectorAll("#listSort button");
+    for(var i=0;i<segBtns.length;i++){
+      var b=segBtns[i], on=b.getAttribute("data-k")===listSort.key;
+      b.className = on ? "on" : "";
+      var label = b.getAttribute("data-k")==="date" ? "时间" : "金额";
+      b.innerHTML = label + (on ? '<span class="sarr">'+arrow+'</span>' : '');
+    }
+    var ths=document.querySelectorAll(".flist th.sortable");
+    for(var j=0;j<ths.length;j++){
+      var th=ths[j], k=th.getAttribute("data-k"), hit=k===listSort.key;
+      th.classList.toggle("on", hit);
+      th.setAttribute("aria-sort", hit ? (listSort.dir<0?"descending":"ascending") : "none");
+      var sp=th.querySelector(".sarr"); if(sp) sp.textContent = hit ? arrow : "";
+    }
+  }
+
+  function setListSort(key){
+    if(key!=="date" && key!=="amount") return;
+    if(listSort.key===key) listSort.dir = -listSort.dir;   // 同一维度：翻转升降
+    else { listSort.key=key; listSort.dir=-1; }            // 换维度：时间默认新→旧，金额默认大→小
+    saveListSort();
+    renderList();
+  }
+
   function filteredRecords(){
     var yrEl=$("#fYear"), yr=yrEl?yrEl.value:"";
     var mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
@@ -1350,17 +1412,18 @@
       }
       if(kw){ var hay=((r.merchant||"")+" "+(r.note||"")+" "+(r.source||"")).toLowerCase(); if(hay.indexOf(kw)<0) return false; }
       return true;
-    }).sort(function(a,b){ return (b.date||"").localeCompare(a.date||"") || (b.createdAt||0)-(a.createdAt||0); });
+    }).sort(listSorter());
   }
 
   var listState={page:1, pageSize:100, _sig:"", _rows:[]};
 
   function renderList(){
     renderFilters();
+    renderSortUI();
     var catSig=Array.from(catSel).sort().join(",");
     var yrEl=$("#fYear"), yr=yrEl?yrEl.value:"";
     var mon=$("#fMonth").value, typ=$("#fType").value, kw=$("#fKw").value.trim().toLowerCase();
-    var filterSig=[catSig,yr,mon,typ,kw,$("#fAmtMin").value.trim(),$("#fAmtMax").value.trim()].join("|");
+    var filterSig=[catSig,yr,mon,typ,kw,$("#fAmtMin").value.trim(),$("#fAmtMax").value.trim(),listSort.key,listSort.dir].join("|");
     var dataSig=filterSig+"|"+state.records.length+"|"+dataRev;
     var rows;
     if(filterSig!==listState._sig){
@@ -2818,6 +2881,16 @@
         clearTimeout(_amtT);
         _amtT=setTimeout(renderList,200);
       });
+    });
+    var _sortSeg=$("#listSort");
+    if(_sortSeg) _sortSeg.addEventListener("click",function(e){
+      var b=e.target.closest("button[data-k]");
+      if(b) setListSort(b.getAttribute("data-k"));
+    });
+    var _flist=document.querySelector("table.flist");
+    if(_flist) _flist.addEventListener("click",function(e){
+      var th=e.target.closest("th.sortable[data-k]");
+      if(th) setListSort(th.getAttribute("data-k"));
     });
     $("#btnAddManual").addEventListener("click",addManual);
 
